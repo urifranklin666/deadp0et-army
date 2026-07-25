@@ -18,6 +18,15 @@
     "pg": "^8.13.1"
   },
   "devDependencies": {
-    "@signalapp/libsignal-client": "^0.99.1"
+    "@hpke/chacha20poly1305": "^1.8.0",
+    "@hpke/core": "^1.9.0",
+    "@hpke/dhkem-x25519": "^1.8.0",
+    "@hpke/ml-kem": "^0.3.0",
+    "@noble/ciphers": "^2.2.0",
+    "@noble/curves": "^2.2.0",
+    "@noble/hashes": "^2.2.0",
+    "@noble/post-quantum": "^0.6.1",
+    "@signalapp/libsignal-client": "^0.99.1",
+    "ts-mls": "^1.6.2"
   }
 }
