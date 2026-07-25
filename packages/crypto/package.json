@@ -1,0 +1,7 @@
+{
+  "name": "@deadp0et/crypto",
+  "private": true,
+  "type": "module",
+  "main": "src/index.js",
+  "dependencies": { "@signalapp/libsignal-client": "^0.99.1" }
+}
