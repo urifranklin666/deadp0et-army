@@ -5,6 +5,7 @@ import { pool, q } from "./db.js";
 import { authRoutes, requireSession } from "./routes/auth.js";
 import { keyRoutes } from "./routes/keys.js";
 import { messageRoutes } from "./routes/messages.js";
+import { mlsRoutes } from "./routes/mls.js";
 
 const app = Fastify({
   logger: { level: process.env.LOG_LEVEL || "info" },
@@ -37,6 +38,7 @@ app.get("/api/meta", async () => ({
 await app.register(authRoutes);
 await app.register(keyRoutes);
 await app.register(messageRoutes);
+await app.register(mlsRoutes);
 
 app.setErrorHandler((err, req, reply) => {
   const status = err.statusCode && err.statusCode < 500 ? err.statusCode : 500;
