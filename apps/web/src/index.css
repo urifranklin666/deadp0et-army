@@ -1,0 +1,13 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root { height: 100%; }
+body { background: #05060a; }
+
+@keyframes dp-rise { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
+@keyframes dp-blink { 0%,49% { opacity: 1 } 50%,100% { opacity: 0 } }
+
+.dp-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+.dp-scroll::-webkit-scrollbar-thumb { background: rgba(251,59,83,.4); border-radius: 9999px; }
+.dp-scroll::-webkit-scrollbar-track { background: transparent; }

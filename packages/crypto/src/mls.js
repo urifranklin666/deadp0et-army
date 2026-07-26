@@ -24,8 +24,27 @@ import {
   generateKeyPackage, createGroup, createCommit, joinGroup,
   createApplicationMessage, processPrivateMessage,
   encodeMlsMessage, decodeMlsMessage,
+  encodeGroupState, decodeGroupState,
   defaultCapabilities, defaultLifetime, emptyPskIndex,
+  defaultKeyRetentionConfig, defaultLifetimeConfig, defaultKeyPackageEqualityConfig,
+  defaultPaddingConfig, defaultAuthenticationService,
 } from "ts-mls";
+
+/**
+ * ClientState is GroupState & { clientConfig }, but encodeGroupState only
+ * round-trips the GroupState half — restoring without re-attaching a config
+ * fails later with "cannot read properties of undefined (reading
+ * 'paddingConfig')". ts-mls does not re-export defaultClientConfig from its
+ * index, so rebuild it from the five pieces that ARE public rather than
+ * reaching into a deep subpath.
+ */
+const CLIENT_CONFIG = {
+  keyRetentionConfig: defaultKeyRetentionConfig,
+  lifetimeConfig: defaultLifetimeConfig,
+  keyPackageEqualityConfig: defaultKeyPackageEqualityConfig,
+  paddingConfig: defaultPaddingConfig,
+  authService: defaultAuthenticationService,
+};
 
 /**
  * Post-quantum end to end: ML-KEM1024 key exchange, ML-DSA87 signatures.
@@ -157,5 +176,56 @@ export class MlsClient {
     const res = await processPrivateMessage(this.#state, msg.privateMessage, emptyPskIndex, this.#cs);
     this.#state = res.newState;
     return res.kind === "applicationMessage" ? fromUtf8(res.message) : null;
+  }
+
+  // ------------------------------------------------------------ persistence
+  //
+  // This is what has to survive a page reload. Without it a refresh loses
+  // group membership outright: the ratchet state is gone and the server
+  // cannot help, because it never had the keys.
+
+  /** Serialize group state. Null before a group is created or joined. */
+  exportState() {
+    return this.#state ? encodeGroupState(this.#state) : null;
+  }
+
+  /**
+   * Serialize this device's key package. PrivateKeyPackage is three raw
+   * Uint8Arrays, so no ts-mls encoder is needed — there isn't one.
+   */
+  exportKeyPackage() {
+    if (!this.#kp) return null;
+    return {
+      public: b64(encodeMlsMessage({
+        version: MLS_VERSION, wireformat: "mls_key_package", keyPackage: this.#kp.publicPackage,
+      })),
+      init: b64(this.#kp.privatePackage.initPrivateKey),
+      hpke: b64(this.#kp.privatePackage.hpkePrivateKey),
+      sig: b64(this.#kp.privatePackage.signaturePrivateKey),
+    };
+  }
+
+  /** Rehydrate from exportKeyPackage() / exportState() output. */
+  static async restore(identity, { keyPackage, state } = {}) {
+    const c = await MlsClient.create(identity);
+    if (keyPackage) {
+      const msg = decode(unb64(keyPackage.public));
+      if (msg.wireformat !== "mls_key_package") throw new Error("not a key package");
+      c.#kp = {
+        publicPackage: msg.keyPackage,
+        privatePackage: {
+          initPrivateKey: unb64(keyPackage.init),
+          hpkePrivateKey: unb64(keyPackage.hpke),
+          signaturePrivateKey: unb64(keyPackage.sig),
+        },
+      };
+    }
+    if (state) {
+      const dec = decodeGroupState(state, 0);
+      const gs = Array.isArray(dec) ? dec[0] : dec;
+      if (!gs) throw new Error("corrupt group state");
+      c.#state = { ...gs, clientConfig: CLIENT_CONFIG };
+    }
+    return c;
   }
 }

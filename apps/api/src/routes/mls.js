@@ -24,6 +24,38 @@ async function groupMembership(userId, groupIdB64) {
 }
 
 export async function mlsRoutes(app) {
+  // --------------------------------------------------------------- devices
+
+  /**
+   * Register an MLS device.
+   *
+   * Deliberately separate from POST /api/devices, which demands Signal
+   * prekey material an MLS client has no reason to generate. `identity_key`
+   * here holds the MLS credential identity, not a Signal identity key — the
+   * column is shared, the protocols are not.
+   */
+  app.post("/api/mls/devices", { preHandler: requireSession }, async (req, reply) => {
+    const { name, identity } = req.body || {};
+    if (!identity) return reply.code(400).send({ error: "identity required" });
+    const idBytes = unb64(identity);
+    if (idBytes.length > 4096) return reply.code(400).send({ error: "identity too large" });
+
+    // Reuse the row for a device presenting the same identity, so a reload
+    // does not accumulate phantom devices for one browser profile.
+    const existing = await q(
+      "SELECT id FROM devices WHERE user_id=$1 AND identity_key=$2 LIMIT 1",
+      [req.user.id, idBytes]);
+    if (existing.rowCount) {
+      await q("UPDATE devices SET last_seen_at=now() WHERE id=$1", [existing.rows[0].id]);
+      return { deviceId: existing.rows[0].id, reused: true };
+    }
+    const { rows } = await q(
+      `INSERT INTO devices(user_id, name, registration_id, identity_key)
+       VALUES ($1,$2,$3,$4) RETURNING id`,
+      [req.user.id, name ?? "web", 1 + Math.floor(Math.random() * 2 ** 30), idBytes]);
+    return { deviceId: rows[0].id, reused: false };
+  });
+
   // ---------------------------------------------------------- key packages
 
   app.post("/api/mls/key-packages", { preHandler: requireSession }, async (req, reply) => {

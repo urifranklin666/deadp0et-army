@@ -33,11 +33,18 @@ export async function messageRoutes(app) {
   });
 
   app.get("/api/channels", { preHandler: requireSession }, async (req) => {
+    // groupId comes along so a reloading client can find its saved MLS state
+    // instead of concluding the group doesn't exist and founding a second one.
     const { rows } = await q(
-      `SELECT c.id, c.slug, c.kind, m.role FROM channels c
-         JOIN channel_members m ON m.channel_id=c.id
-        WHERE m.user_id=$1 ORDER BY c.created_at DESC`, [req.user.id]);
-    return { channels: rows };
+      `SELECT c.id, c.slug, c.kind, m.role,
+              encode(g.group_id, 'base64') AS "groupId",
+              g.epoch
+         FROM channels c
+         JOIN channel_members m ON m.channel_id = c.id
+         LEFT JOIN mls_groups g ON g.channel_id = c.id
+        WHERE m.user_id = $1
+        ORDER BY c.created_at DESC`, [req.user.id]);
+    return { channels: rows.map((r) => ({ ...r, epoch: r.epoch === null ? null : Number(r.epoch) })) };
   });
 
   // Deliver one ciphertext per recipient device.
