@@ -1,11 +1,13 @@
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
 import rateLimit from "@fastify/rate-limit";
+import websocket from "@fastify/websocket";
 import { pool, q } from "./db.js";
 import { authRoutes, requireSession } from "./routes/auth.js";
 import { keyRoutes } from "./routes/keys.js";
 import { messageRoutes } from "./routes/messages.js";
 import { mlsRoutes } from "./routes/mls.js";
+import { liveRoutes } from "./routes/live.js";
 
 const app = Fastify({
   logger: { level: process.env.LOG_LEVEL || "info" },
@@ -16,6 +18,8 @@ const app = Fastify({
 
 await app.register(cookie, { secret: process.env.SESSION_SECRET });
 await app.register(rateLimit, { max: 300, timeWindow: "1 minute" });
+// Presence frames are tiny; the cap here just bounds a hostile client.
+await app.register(websocket, { options: { maxPayload: 8 * 1024 } });
 
 app.get("/api/health", async () => {
   const started = Date.now();
@@ -39,6 +43,7 @@ await app.register(authRoutes);
 await app.register(keyRoutes);
 await app.register(messageRoutes);
 await app.register(mlsRoutes);
+await app.register(liveRoutes);
 
 app.setErrorHandler((err, req, reply) => {
   const status = err.statusCode && err.statusCode < 500 ? err.statusCode : 500;

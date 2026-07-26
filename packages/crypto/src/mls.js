@@ -24,7 +24,7 @@ import {
   generateKeyPackage, createGroup, createCommit, joinGroup,
   createApplicationMessage, processPrivateMessage,
   encodeMlsMessage, decodeMlsMessage,
-  encodeGroupState, decodeGroupState,
+  encodeGroupState, decodeGroupState, mlsExporter,
   defaultCapabilities, defaultLifetime, emptyPskIndex,
   defaultKeyRetentionConfig, defaultLifetimeConfig, defaultKeyPackageEqualityConfig,
   defaultPaddingConfig, defaultAuthenticationService,
@@ -94,7 +94,7 @@ const decode = (bytes) => {
 };
 
 export class MlsClient {
-  #cs; #state; #kp;
+  #cs; #state; #kp; #presence;
 
   constructor(identity) { this.identity = identity; }
 
@@ -176,6 +176,62 @@ export class MlsClient {
     const res = await processPrivateMessage(this.#state, msg.privateMessage, emptyPskIndex, this.#cs);
     this.#state = res.newState;
     return res.kind === "applicationMessage" ? fromUtf8(res.message) : null;
+  }
+
+  // -------------------------------------------------------------- presence
+  //
+  // Ephemeral traffic (cursors) must NOT go through application messages:
+  // each one advances the sender's ratchet, and at pointer-event rates that
+  // would blow past the receivers' skipped-key window, grow the ordered log
+  // without bound, and persist throwaway data forever.
+  //
+  // Instead derive a symmetric key with the MLS exporter (RFC 9420 §8.5).
+  // Every member at the same epoch derives the SAME key from the group
+  // secret, and a new epoch derives a new one — so presence inherits the
+  // group's forward secrecy while costing the ratchet nothing.
+
+  /** AES-GCM key shared by all members of the current epoch. */
+  async presenceKey() {
+    if (!this.#state) throw new Error("no group");
+    const epoch = this.epoch;
+    if (this.#presence?.epoch === epoch) return this.#presence.key;
+
+    const raw = await mlsExporter(
+      this.#state.keySchedule.exporterSecret,
+      "deadp0et presence",
+      new Uint8Array(0),
+      32,
+      this.#cs
+    );
+    const key = await crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt", "decrypt"]);
+    this.#presence = { epoch, key };
+    return key;
+  }
+
+  /** Encrypt an ephemeral packet. Returns nonce||ciphertext. */
+  async sealPresence(obj) {
+    const key = await this.presenceKey();
+    const nonce = crypto.getRandomValues(new Uint8Array(12));
+    const pt = new TextEncoder().encode(JSON.stringify(obj));
+    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, key, pt));
+    const out = new Uint8Array(nonce.length + ct.length);
+    out.set(nonce, 0);
+    out.set(ct, nonce.length);
+    return out;
+  }
+
+  /** Decrypt an ephemeral packet; null if it isn't for our epoch. */
+  async openPresence(bytes) {
+    try {
+      const key = await this.presenceKey();
+      const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+      const pt = await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: buf.subarray(0, 12) }, key, buf.subarray(12));
+      return JSON.parse(new TextDecoder().decode(pt));
+    } catch {
+      // A peer one epoch ahead/behind simply won't decrypt. Not an error.
+      return null;
+    }
   }
 
   // ------------------------------------------------------------ persistence

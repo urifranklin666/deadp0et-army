@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Eraser, Loader2, Palette, Trash2, Undo2 } from "lucide-react";
+import { Eraser, Palette, Trash2, Undo2 } from "lucide-react";
+import { Presence } from "./lib/presence.js";
 
 /**
  * Collaborative canvas over the group's Yjs document.
@@ -14,7 +15,7 @@ import { Eraser, Loader2, Palette, Trash2, Undo2 } from "lucide-react";
 const COLORS = ["#fb3b53", "#0ea5c4", "#e879f9", "#fbbf24", "#e2e8f0"];
 const WIDTHS = [2, 4, 8, 16];
 
-export default function Canvas({ session, onError }) {
+export default function Canvas({ session, onError, openModal }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const [color, setColor] = useState(COLORS[0]);
@@ -23,6 +24,8 @@ export default function Canvas({ session, onError }) {
   const [count, setCount] = useState(session.strokes.length);
   const drawing = useRef(null);
   const [, force] = useState(0);
+  const presence = useRef(null);
+  const [peers, setPeers] = useState([]);
 
   const joined = !!session.client;
 
@@ -72,7 +75,18 @@ export default function Canvas({ session, onError }) {
     session.onCanvasChange = onChange;
     const ro = new ResizeObserver(paint);
     if (wrapRef.current) ro.observe(wrapRef.current);
-    return () => { session.onCanvasChange = null; ro.disconnect(); };
+
+    const p = new Presence(session);
+    p.onChange = () => setPeers([...p.peers.entries()].map(([id, v]) => ({ id, ...v })));
+    p.connect();
+    presence.current = p;
+
+    return () => {
+      session.onCanvasChange = null;
+      ro.disconnect();
+      p.close();
+      presence.current = null;
+    };
   }, [session, paint]);
 
   /* ------------------------------------------------------------- pointers */
@@ -97,6 +111,8 @@ export default function Canvas({ session, onError }) {
   };
 
   const move = (e) => {
+    const [cx, cy] = pos(e);
+    presence.current?.move(cx, cy);
     if (!drawing.current) return;
     const [x, y] = pos(e);
     const p = drawing.current.p;
@@ -124,9 +140,11 @@ export default function Canvas({ session, onError }) {
   };
 
   const clear = () => {
-    if (session.strokes.length && confirm("Clear the board for everyone?")) {
-      session.strokes.delete(0, session.strokes.length);
-    }
+    if (!session.strokes.length) return;
+    openModal?.({
+      kind: "clear",
+      onConfirm: () => session.strokes.delete(0, session.strokes.length),
+    });
   };
 
   /* ----------------------------------------------------------------- view */
@@ -163,11 +181,11 @@ export default function Canvas({ session, onError }) {
           <Trash2 className="h-4 w-4" />
         </button>
         <span className="ml-auto font-mono text-[10px] uppercase tracking-widest text-slate-600">
-          {count} stroke{count === 1 ? "" : "s"} · e2ee
+          {peers.length ? `${peers.length} live · ` : ""}{count} stroke{count === 1 ? "" : "s"} · e2ee
         </span>
       </div>
 
-      <div ref={wrapRef} className="relative min-h-0 flex-1 bg-black/40">
+      <div ref={wrapRef} className="relative min-h-0 flex-1 bg-black/40 [container-type:size]">
         <canvas
           ref={canvasRef}
           onPointerDown={down}
@@ -177,6 +195,20 @@ export default function Canvas({ session, onError }) {
           onPointerLeave={up}
           className={`absolute inset-0 h-full w-full touch-none ${erasing ? "cursor-cell" : "cursor-crosshair"} ${joined ? "" : "opacity-40"}`}
         />
+        {peers.map((p) => (
+          <div key={p.id}
+            className="pointer-events-none absolute z-10 transition-transform duration-100 ease-linear"
+            style={{ left: 0, top: 0, transform: `translate(${p.x * 100}cqw, ${p.y * 100}cqh)` }}>
+            <svg width="18" height="18" viewBox="0 0 18 18" className="drop-shadow">
+              <path d="M2 2 L2 14 L6 10.5 L8.5 16 L11 15 L8.5 9.5 L14 9 Z"
+                fill="#22d3ee" stroke="#05060a" strokeWidth="1.2" />
+            </svg>
+            <span className="ml-3 rounded bg-cyan-500/20 px-1.5 py-0.5 font-mono text-[10px] text-cyan-200 backdrop-blur-sm">
+              {p.handle}
+            </span>
+          </div>
+        ))}
+
         {!joined ? (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
             <p className="max-w-xs text-center text-[11px] leading-relaxed text-slate-500">

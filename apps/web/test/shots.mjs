@@ -20,8 +20,9 @@ await p1.getByRole("button", { name: "New channel" }).waitFor({ timeout: 90000 }
 await p1.screenshot({ path: `${SP}/app-2-empty.png` });
 
 const slug = "war-room-" + rnd();
-p1.once("dialog", d => d.accept(slug));
 await p1.getByRole("button", { name: "New channel" }).click();
+await p1.getByPlaceholder("war-room").fill(slug);
+await p1.getByRole("button", { name: "Create", exact: true }).click();
 await p1.getByText(slug, { exact: true }).first().waitFor({ timeout: 60000 });
 for (const m of ["relay mesh is up. 42 nodes green.", "canvas op: rect(12,40,180,90) #ff2247", "burn the epoch when we're done"]) {
   await p1.getByPlaceholder(/Encrypted before it leaves/).fill(m);

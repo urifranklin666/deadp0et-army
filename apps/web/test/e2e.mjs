@@ -52,8 +52,9 @@ console.log("· alice registered a passkey and booted:", alice.handle);
 
 // Channel creation founds an MLS group client-side, then registers it.
 const slug = "room-" + rnd();
-alice.page.once("dialog", (d) => d.accept(slug));
 await alice.page.getByRole("button", { name: "New channel" }).click();
+await alice.page.getByPlaceholder("war-room").fill(slug);
+await alice.page.getByRole("button", { name: "Create", exact: true }).click();
 await alice.page.getByText(slug, { exact: true }).first().waitFor({ timeout: 60000 });
 await alice.page.getByText(/^epoch \d+$/).waitFor({ timeout: 30000 });
 const epoch0 = await alice.page.getByText(/^epoch \d+$/).innerText();
@@ -90,13 +91,10 @@ assert.equal(bobChannels.length, 0, "bob must not see alice's channel before bei
 console.log("· uninvited identity sees nothing");
 
 // Invite bob; he should be granted membership by the Welcome.
-// One handler for both dialogs: the prompt takes a value, the confirmation
-// alert does not. Two `once` handlers would both fire on the first dialog.
-const inviteDialogs = (d) => (d.type() === "prompt" ? d.accept(bob.handle) : d.accept());
-alice.page.on("dialog", inviteDialogs);
 await alice.page.getByRole("button", { name: "Invite" }).click();
+await alice.page.getByPlaceholder("ghost_01").last().fill(bob.handle);
+await alice.page.getByRole("button", { name: "Invite", exact: true }).last().click();
 await alice.page.waitForTimeout(6000);
-alice.page.off("dialog", inviteDialogs);
 
 const afterInvite = await bob.page.evaluate(async (o) => {
   const r = await fetch(o + "/api/channels", { credentials: "same-origin" });

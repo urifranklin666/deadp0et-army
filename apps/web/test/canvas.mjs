@@ -64,8 +64,9 @@ const bob = await newUser(browser, "cv_b_" + rnd());
 console.log("· two identities registered:", alice.handle, "/", bob.handle);
 
 const slug = "board-" + rnd();
-alice.page.once("dialog", (d) => d.accept(slug));
 await alice.page.getByRole("button", { name: "New channel" }).click();
+await alice.page.getByPlaceholder("war-room").fill(slug);
+await alice.page.getByRole("button", { name: "Create", exact: true }).click();
 await alice.page.getByText(slug, { exact: true }).first().waitFor({ timeout: 60000 });
 await alice.page.getByRole("button", { name: "Canvas" }).click();
 await alice.page.locator("canvas").waitFor({ timeout: 30000 });
@@ -77,11 +78,10 @@ assert.equal(await strokeCount(alice.page), 1, "alice should have one stroke");
 console.log("· alice drew a stroke (1 MLS message for the whole group)");
 
 // Invite bob AFTER drawing, so the late-joiner snapshot path is exercised.
-const dialogs = (d) => (d.type() === "prompt" ? d.accept(bob.handle) : d.accept());
-alice.page.on("dialog", dialogs);
 await alice.page.getByRole("button", { name: "Invite" }).click();
+await alice.page.getByPlaceholder("ghost_01").last().fill(bob.handle);
+await alice.page.getByRole("button", { name: "Invite", exact: true }).last().click();
 await alice.page.waitForTimeout(6000);
-alice.page.off("dialog", dialogs);
 console.log("· alice invited bob after the board already had content");
 
 // Bob picks up the Welcome, joins, and should receive the snapshot.

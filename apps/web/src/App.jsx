@@ -4,12 +4,13 @@ import {
   MessageSquare, PenLine, RefreshCw, Send, Shield, Skull, UserPlus, X,
 } from "lucide-react";
 import Canvas from "./Canvas.jsx";
+import { ConfirmModal, PromptModal } from "./Modal.jsx";
 import { api } from "./lib/api.js";
 import { store, K } from "./lib/db.js";
 import { GroupSession, SUITE, ensureDevice, login, register } from "./lib/session.js";
 
 const SYNC_MS = 2500;
-const BUILD = "2026-07-26.4";
+const BUILD = "2026-07-26.5";
 
 /* ------------------------------------------------------------ primitives */
 
@@ -163,6 +164,7 @@ function App() {
   const [notice, setNotice] = useState(null);
   const [busy, setBusy] = useState(null);
   const sessions = useRef(new Map());
+  const [modal, setModal] = useState(null);
 
   const bump = useCallback(() => setTick((t) => t + 1), []);
 
@@ -235,9 +237,7 @@ function App() {
     bump();
   }
 
-  async function createChannel() {
-    const slug = prompt("Channel slug (a-z, 0-9, dashes):");
-    if (!slug) return;
+  async function createChannel(slug) {
     setBusy("create");
     setErr(null);
     try {
@@ -251,7 +251,7 @@ function App() {
       setNotice(`#${ch.slug} created — you are its only member until you invite someone.`);
       bump();
     } catch (e) {
-      setErr(e.message);
+      throw e;               // surfaced inline by the modal
     } finally {
       setBusy(null);
     }
@@ -337,7 +337,7 @@ function App() {
         <aside className="flex w-56 shrink-0 flex-col border-r border-white/10">
           <div className="flex items-center justify-between px-3 py-2.5">
             <span className="text-[10px] uppercase tracking-widest text-slate-500">Channels</span>
-            <button onClick={createChannel} disabled={busy === "create"}
+            <button onClick={() => setModal({ kind: "channel" })} disabled={busy === "create"}
               className="rounded p-1 text-slate-400 hover:bg-white/5 hover:text-white disabled:opacity-40"
               aria-label="New channel">
               {busy === "create" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
@@ -367,9 +367,52 @@ function App() {
               {notice ? <Banner kind="info" onClose={() => setNotice(null)}>{notice}</Banner> : null}
             </div>
           ) : null}
-          {active ? <Conversation session={active} onError={setErr} onChange={bump} /> : <EmptyState />}
+          {active ? (
+            <Conversation session={active} onError={setErr} onChange={bump} openModal={setModal} />
+          ) : <EmptyState />}
         </main>
       </div>
+
+      {modal?.kind === "channel" ? (
+        <PromptModal
+          title="New channel"
+          label="Slug"
+          placeholder="war-room"
+          hint="2–48 chars: a–z, 0–9, dashes. Creates an MLS group whose keys never reach the server."
+          submitLabel="Create"
+          validate={(v) => (v && !/^[a-z0-9-]{2,48}$/.test(v) ? "Only a-z, 0-9 and dashes." : null)}
+          onSubmit={createChannel}
+          onClose={() => setModal(null)}
+        />
+      ) : null}
+
+      {modal?.kind === "invite" ? (
+        <PromptModal
+          title={`Invite to #${modal.session.channel.slug}`}
+          label="Handle"
+          placeholder="ghost_01"
+          hint="They must have signed in at least once, so a key package exists to claim."
+          submitLabel="Invite"
+          validate={(v) => (v && !/^[a-z0-9_]{3,32}$/.test(v) ? "Only a-z, 0-9 and underscore." : null)}
+          onSubmit={async (h) => {
+            const n = await modal.session.invite(h);
+            bump();
+            setNotice(`Invited ${h} (${n} device${n > 1 ? "s" : ""}). They join on their next poll.`);
+          }}
+          onClose={() => setModal(null)}
+        />
+      ) : null}
+
+      {modal?.kind === "clear" ? (
+        <ConfirmModal
+          title="Clear the board"
+          body="This removes every stroke for everyone in the group. It cannot be undone."
+          confirmLabel="Clear it"
+          danger
+          onConfirm={modal.onConfirm}
+          onClose={() => setModal(null)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -389,7 +432,7 @@ function EmptyState() {
   );
 }
 
-function Conversation({ session, onError, onChange }) {
+function Conversation({ session, onError, onChange, openModal }) {
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(null);
   const [mode, setMode] = useState(session.channel.kind === "canvas" ? "canvas" : "chat");
@@ -409,22 +452,7 @@ function Conversation({ session, onError, onChange }) {
     finally { setBusy(null); }
   };
 
-  const invite = async () => {
-    const who = prompt("Invite handle:");
-    if (!who) return;
-    setBusy("invite");
-    try {
-      const n = await session.invite(who.trim().toLowerCase());
-      onChange();
-      onError(null);
-      alert(`Invited ${who} (${n} device${n > 1 ? "s" : ""}). They join on their next poll.`);
-    } catch (e) {
-      // An epoch conflict is expected under concurrent invites; say so plainly.
-      onError(/epoch conflict/.test(e.message)
-        ? "Someone else changed the group first. Re-sync and try again."
-        : e.message);
-    } finally { setBusy(null); }
-  };
+  const invite = () => openModal({ kind: "invite", session });
 
   return (
     <>
@@ -450,14 +478,14 @@ function Conversation({ session, onError, onChange }) {
             className="rounded p-1.5 text-slate-500 hover:bg-white/5 hover:text-white" aria-label="Sync">
             <RefreshCw className="h-3.5 w-3.5" />
           </button>
-          <Button icon={UserPlus} variant="ghost" busy={busy === "invite"} disabled={!joined}
+          <Button icon={UserPlus} variant="ghost" disabled={!joined}
             onClick={invite} className="!px-3 !py-1.5 !text-xs">
             Invite
           </Button>
         </div>
       </div>
 
-      {mode === "canvas" ? <Canvas session={session} onError={onError} /> : (
+      {mode === "canvas" ? <Canvas session={session} onError={onError} openModal={openModal} /> : (
       <>
       <div className="dp-scroll min-h-0 flex-1 overflow-y-auto px-4 py-4">
         {!joined ? (
