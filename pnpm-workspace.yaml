@@ -1,6 +1,13 @@
 packages:
   - "apps/*"
   - "packages/*"
+
 allowBuilds:
-  '@signalapp/libsignal-client': set this to true or false
-  esbuild: set this to true or false
+  '@signalapp/libsignal-client': true
+  esbuild: true
+
+# esbuild needs its postinstall to place the native binary; libsignal ships
+# prebuilds but approving it keeps `pnpm install` from failing on a warning.
+onlyBuiltDependencies:
+  - esbuild
+  - "@signalapp/libsignal-client"
