@@ -59,4 +59,5 @@ export const K = {
   groupState: (handle, groupId) => `gs:${handle}:${groupId}`,
   cursor: (handle, groupId) => `cur:${handle}:${groupId}`,
   history: (handle, groupId) => `hist:${handle}:${groupId}`,
+  ydoc: (handle, groupId) => `ydoc:${handle}:${groupId}`,
 };

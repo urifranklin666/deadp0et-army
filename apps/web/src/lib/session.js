@@ -1,7 +1,9 @@
+import * as Y from "yjs";
 import { startRegistration, startAuthentication } from "@simplewebauthn/browser";
 import { MlsClient, SUITE, b64, unb64 } from "@deadp0et/crypto/mls";
 import { api } from "./api.js";
 import { store, K } from "./db.js";
+import { T, decodeEnvelope, encodeEnvelope } from "./envelope.js";
 
 export { SUITE };
 
@@ -76,15 +78,72 @@ export class GroupSession {
     this.client = null;
     this.cursor = 0;
     this.history = [];
+
+    // Shared canvas state. Yjs is a CRDT, so updates are commutative and
+    // idempotent — out-of-order or duplicated delivery converges anyway,
+    // which pairs well with a log we replay from a cursor.
+    this.doc = new Y.Doc();
+    this.strokes = this.doc.getArray("strokes");
+    this.onCanvasChange = null;
+    this.#wireDoc();
   }
 
   get epoch() { return this.client ? this.client.epoch : null; }
+
+  #wireDoc() {
+    this.doc.on("update", (update, origin) => {
+      // "remote" and "restore" origins came FROM the log or disk; echoing them
+      // back would loop. Only locally-authored edits get published.
+      if (origin === "remote" || origin === "restore") {
+        this.onCanvasChange?.();
+        return;
+      }
+      this.#queueCanvasUpdate(update);
+      this.onCanvasChange?.();
+    });
+  }
+
+  /**
+   * Coalesce rapid local edits into one message.
+   *
+   * A freehand stroke fires an update per pointer sample; publishing each
+   * would mean one MLS encryption and one HTTP round trip per few pixels.
+   */
+  #queueCanvasUpdate(update) {
+    this.pendingUpdates ??= [];
+    this.pendingUpdates.push(update);
+    clearTimeout(this.flushTimer);
+    this.flushTimer = setTimeout(() => this.flushCanvas().catch(() => {}), 220);
+  }
+
+  async flushCanvas() {
+    if (!this.client || !this.pendingUpdates?.length) return;
+    const merged = Y.mergeUpdates(this.pendingUpdates);
+    this.pendingUpdates = [];
+    await this.#sendEnvelope({ t: T.Y_UPDATE, u: b64(merged) });
+    await this.#persist();
+  }
 
   async #persist() {
     const state = this.client.exportState();
     if (state) await store.set(K.groupState(this.handle, this.groupId), state);
     await store.set(K.cursor(this.handle, this.groupId), this.cursor);
     await store.set(K.history(this.handle, this.groupId), this.history);
+    await store.set(K.ydoc(this.handle, this.groupId), Y.encodeStateAsUpdate(this.doc));
+  }
+
+  async #restoreDoc() {
+    const saved = await store.get(K.ydoc(this.handle, this.groupId));
+    if (saved) Y.applyUpdate(this.doc, new Uint8Array(saved), "restore");
+  }
+
+  async #sendEnvelope(obj) {
+    const ct = await this.client.encrypt(encodeEnvelope(obj));
+    const { seq } = await api.postMessage(this.groupId, {
+      kind: "application", senderDeviceId: this.deviceId, payload: b64(ct),
+    });
+    this.cursor = Math.max(this.cursor, seq);
+    return seq;
   }
 
   /** Restore from local storage, or create the group if we are its founder. */
@@ -98,6 +157,7 @@ export class GroupSession {
       this.client = await MlsClient.restore(this.handle, { keyPackage: kp, state });
       this.cursor = (await store.get(K.cursor(this.handle, groupIdB64))) || 0;
       this.history = (await store.get(K.history(this.handle, groupIdB64))) || [];
+      await this.#restoreDoc();
       return true;
     }
 
@@ -126,6 +186,8 @@ export class GroupSession {
     this.history = [];
     await api.ackWelcomes(this.deviceId, [mine.id]);
     await this.#persist();
+    // The canvas so far is unreadable to us — we lacked the keys. An existing
+    // member sends a snapshot after inviting; until it lands the board is blank.
     return true;
   }
 
@@ -138,10 +200,16 @@ export class GroupSession {
       try {
         const text = await this.client.apply(unb64(m.payload));
         if (text !== null) {
-          this.history.push({
-            seq: m.seq, text, at: m.createdAt,
-            mine: m.senderDeviceId === this.deviceId,
-          });
+          const env = decodeEnvelope(text);
+          if (env.t === T.Y_UPDATE || env.t === T.Y_SNAPSHOT) {
+            // "remote" origin stops the doc observer republishing this.
+            Y.applyUpdate(this.doc, unb64(env.u), "remote");
+          } else {
+            this.history.push({
+              seq: m.seq, text: env.b, at: m.createdAt,
+              mine: m.senderDeviceId === this.deviceId,
+            });
+          }
         }
         applied++;
       } catch (e) {
@@ -156,16 +224,18 @@ export class GroupSession {
   }
 
   async send(text) {
-    const ct = await this.client.encrypt(text);
-    const { seq } = await api.postMessage(this.groupId, {
-      kind: "application", senderDeviceId: this.deviceId, payload: b64(ct),
-    });
+    const seq = await this.#sendEnvelope({ t: T.CHAT, b: text });
     // Our own message is never echoed back through apply() — the sender's
     // ratchet has already moved past it — so record it directly.
     this.history.push({ seq, text, at: new Date().toISOString(), mine: true });
-    this.cursor = Math.max(this.cursor, seq);
     await this.#persist();
     return seq;
+  }
+
+  /** Hand a late joiner the whole board in one message. */
+  async sendCanvasSnapshot() {
+    if (!this.client) return;
+    await this.#sendEnvelope({ t: T.Y_SNAPSHOT, u: b64(Y.encodeStateAsUpdate(this.doc)) });
   }
 
   /** Add another user by handle: claim their KeyPackage, commit, send Welcome. */
@@ -181,6 +251,9 @@ export class GroupSession {
         ref: k.ref, deviceId: k.deviceId, welcome: b64(add.welcome),
       })),
     });
+    // Everything before the commit is undecryptable to the new member, so the
+    // canvas would be blank for them. Re-publish the board at the new epoch.
+    await this.sendCanvasSnapshot();
     await this.#persist();
     return keyPackages.length;
   }

@@ -1,14 +1,15 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle, Check, Fingerprint, Hash, KeyRound, Loader2, LogOut, Plus,
-  RefreshCw, Send, Shield, Skull, UserPlus, X,
+  MessageSquare, PenLine, RefreshCw, Send, Shield, Skull, UserPlus, X,
 } from "lucide-react";
+import Canvas from "./Canvas.jsx";
 import { api } from "./lib/api.js";
 import { store, K } from "./lib/db.js";
 import { GroupSession, SUITE, ensureDevice, login, register } from "./lib/session.js";
 
 const SYNC_MS = 2500;
-const BUILD = "2026-07-26.3";
+const BUILD = "2026-07-26.4";
 
 /* ------------------------------------------------------------ primitives */
 
@@ -391,6 +392,7 @@ function EmptyState() {
 function Conversation({ session, onError, onChange }) {
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(null);
+  const [mode, setMode] = useState(session.channel.kind === "canvas" ? "canvas" : "chat");
   const endRef = useRef(null);
 
   useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [session.history.length]);
@@ -432,6 +434,17 @@ function Conversation({ session, onError, onChange }) {
         <span className="rounded border border-white/10 px-1.5 py-0.5 font-mono text-[10px] text-slate-500">
           epoch {session.epoch ?? "—"}
         </span>
+
+        <div className="ml-4 flex rounded-lg border border-white/10 bg-white/5 p-0.5">
+          {[["chat", "Chat", MessageSquare], ["canvas", "Canvas", PenLine]].map(([id, label, Icon]) => (
+            <button key={id} onClick={() => setMode(id)}
+              className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors
+                ${mode === id ? "bg-rose-600 text-white" : "text-slate-400 hover:text-white"}`}>
+              <Icon className="h-3 w-3" />{label}
+            </button>
+          ))}
+        </div>
+
         <div className="ml-auto flex items-center gap-2">
           <button onClick={async () => { try { await session.sync(); onChange(); } catch (e) { onError(e.message); } }}
             className="rounded p-1.5 text-slate-500 hover:bg-white/5 hover:text-white" aria-label="Sync">
@@ -444,6 +457,8 @@ function Conversation({ session, onError, onChange }) {
         </div>
       </div>
 
+      {mode === "canvas" ? <Canvas session={session} onError={onError} /> : (
+      <>
       <div className="dp-scroll min-h-0 flex-1 overflow-y-auto px-4 py-4">
         {!joined ? (
           <p className="mx-auto max-w-sm text-center text-[11px] leading-relaxed text-slate-600">
@@ -497,6 +512,8 @@ function Conversation({ session, onError, onChange }) {
           </Button>
         </div>
       </div>
+      </>
+      )}
     </>
   );
 }
