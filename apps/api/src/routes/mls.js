@@ -14,7 +14,7 @@ async function ownedDevice(userId, deviceId) {
 /** Confirm the caller is a member of the channel backing this group. */
 async function groupMembership(userId, groupIdB64) {
   const { rows } = await q(
-    `SELECT g.group_id, g.epoch, g.ciphersuite, g.channel_id
+    `SELECT g.group_id, g.epoch, g.ciphersuite, g.channel_id, g.compaction_watermark
        FROM mls_groups g
        JOIN channel_members m ON m.channel_id = g.channel_id
       WHERE g.group_id = $1 AND m.user_id = $2`,
@@ -238,13 +238,47 @@ export async function mlsRoutes(app) {
         ORDER BY seq LIMIT $3`,
       [g.group_id, Number.isFinite(since) ? since : 0, limit]);
 
+    // A cursor at or below the watermark means messages were compacted away
+    // before this device applied them. They cannot be re-sent — MLS decrypts
+    // once — so the client must recover via a fresh snapshot rather than
+    // quietly carrying on with a hole in its state.
+    const watermark = Number(g.compaction_watermark || 0);
+    const gap = watermark > 0 && since < watermark;
+
     return {
       epoch: Number(g.epoch),
+      watermark,
+      gap,
       messages: rows.map((r) => ({
         seq: Number(r.seq), epoch: Number(r.epoch), kind: r.kind,
         senderDeviceId: r.sender_device_id, payload: b64(r.payload), createdAt: r.created_at,
       })),
     };
+  });
+
+  /**
+   * Report how far a device has applied. This is the only input to
+   * compaction: the server prunes strictly below the slowest active device,
+   * because nothing it deletes can ever be reconstructed.
+   */
+  app.post("/api/mls/groups/:groupId/cursor", { preHandler: requireSession }, async (req, reply) => {
+    const seq = Number(req.body?.seq);
+    if (!Number.isFinite(seq) || seq < 0) return reply.code(400).send({ error: "seq required" });
+    const g = await groupMembership(req.user.id, req.params.groupId);
+    if (!g) return reply.code(404).send({ error: "no such group" });
+    const dev = await ownedDevice(req.user.id, req.body?.deviceId);
+    if (!dev) return reply.code(400).send({ error: "unknown device" });
+
+    await q(
+      `INSERT INTO mls_device_cursors(group_id, device_id, last_seq)
+       VALUES ($1,$2,$3)
+       ON CONFLICT (group_id, device_id) DO UPDATE
+         -- never move a cursor backwards; a stale retry must not widen the
+         -- prunable range for everyone else
+         SET last_seq = GREATEST(mls_device_cursors.last_seq, EXCLUDED.last_seq),
+             updated_at = now()`,
+      [g.group_id, dev, seq]);
+    return { ok: true };
   });
 
   // -------------------------------------------------------------- welcomes

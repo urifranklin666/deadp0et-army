@@ -45,6 +45,9 @@ export const api = {
   messages: (groupId, since) =>
     call("GET", `/api/mls/groups/${encodeURIComponent(groupId)}/messages?since=${since || 0}`),
 
+  reportCursor: (groupId, deviceId, seq) =>
+    call("POST", `/api/mls/groups/${encodeURIComponent(groupId)}/cursor`, { deviceId, seq }),
+
   welcomes: (deviceId) => call("GET", `/api/mls/devices/${deviceId}/welcomes`),
   ackWelcomes: (deviceId, ids) => call("POST", `/api/mls/devices/${deviceId}/welcomes/ack`, { ids }),
 };

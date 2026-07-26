@@ -10,7 +10,7 @@ import { store, K } from "./lib/db.js";
 import { GroupSession, SUITE, ensureDevice, login, register } from "./lib/session.js";
 
 const SYNC_MS = 2500;
-const BUILD = "2026-07-26.5";
+const BUILD = "2026-07-26.6";
 
 /* ------------------------------------------------------------ primitives */
 
@@ -501,7 +501,12 @@ function Conversation({ session, onError, onChange, openModal }) {
           <ul className="space-y-2">
             {session.history.map((m) => (
               <li key={m.seq} className="animate-[dp-rise_0.25s_ease-out_both]">
-                {m.error ? (
+                {m.notice ? (
+                  <div className="flex items-start gap-2 rounded-lg border border-cyan-500/25 bg-cyan-950/20 px-3 py-2 text-[11px] text-cyan-200">
+                    <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                    <span>{m.notice}</span>
+                  </div>
+                ) : m.error ? (
                   <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-950/20 px-3 py-2 text-[11px] text-amber-300">
                     <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
                     <span>seq {m.seq}: undecryptable — {m.error}</span>

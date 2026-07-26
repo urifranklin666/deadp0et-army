@@ -7,6 +7,11 @@ import { T, decodeEnvelope, encodeEnvelope } from "./envelope.js";
 
 export { SUITE };
 
+// Republish the whole board every N canvas messages. Low enough that a device
+// which falls behind has a recent self-contained state to start from, high
+// enough that snapshots are a small fraction of the log.
+const SNAPSHOT_EVERY = 25;
+
 /* --------------------------------------------------------------- identity */
 
 export async function register(handle) {
@@ -121,6 +126,15 @@ export class GroupSession {
     const merged = Y.mergeUpdates(this.pendingUpdates);
     this.pendingUpdates = [];
     await this.#sendEnvelope({ t: T.Y_UPDATE, u: b64(merged) });
+
+    // Periodically republish the whole board. Compaction can only prune what
+    // every device has applied, so without a recent snapshot a device that
+    // falls behind would have to replay the entire stroke history to catch
+    // up. A snapshot makes the tail self-contained.
+    this.updatesSinceSnapshot = (this.updatesSinceSnapshot || 0) + 1;
+    if (this.updatesSinceSnapshot >= SNAPSHOT_EVERY) {
+      try { await this.sendCanvasSnapshot(); } catch { /* retried next flush */ }
+    }
     await this.#persist();
   }
 
@@ -191,10 +205,39 @@ export class GroupSession {
     return true;
   }
 
+  /**
+   * Rebuild after the server reports a gap.
+   *
+   * A gap means messages were compacted away before this device applied them.
+   * They are gone for good — MLS decrypts once — so the only honest move is
+   * to drop local canvas state, jump the cursor past the hole, and ask the
+   * group to republish the board. Chat history before the gap is simply lost;
+   * pretending otherwise would leave a silent hole in the transcript.
+   */
+  async #recoverFromGap(watermark) {
+    this.doc.destroy();
+    this.doc = new Y.Doc();
+    this.strokes = this.doc.getArray("strokes");
+    this.#wireDoc();
+    this.cursor = Math.max(this.cursor, watermark);
+    this.history.push({
+      seq: watermark, at: new Date().toISOString(),
+      notice: "Older messages were compacted before this device caught up. Requesting a fresh board.",
+    });
+    await this.#persist();
+    await this.#sendEnvelope({ t: T.Y_REQUEST });
+  }
+
   /** Pull new log entries and apply them in order. */
   async sync() {
     if (!this.client) return { applied: 0 };
-    const { messages } = await api.messages(this.groupId, this.cursor);
+    const res = await api.messages(this.groupId, this.cursor);
+    const { messages } = res;
+    if (res.gap) {
+      await this.#recoverFromGap(Number(res.watermark || 0));
+      this.onCanvasChange?.();
+      return { applied: 0, recovered: true };
+    }
     let applied = 0;
     for (const m of messages) {
       try {
@@ -204,6 +247,11 @@ export class GroupSession {
           if (env.t === T.Y_UPDATE || env.t === T.Y_SNAPSHOT) {
             // "remote" origin stops the doc observer republishing this.
             Y.applyUpdate(this.doc, unb64(env.u), "remote");
+            if (env.t === T.Y_SNAPSHOT) this.lastSnapshotSeq = m.seq;
+          } else if (env.t === T.Y_REQUEST) {
+            // Someone lost state to compaction. Answer with the board, but
+            // stagger so a large group doesn't publish N identical snapshots.
+            if (m.senderDeviceId !== this.deviceId) this.#answerSnapshotRequest();
           } else {
             this.history.push({
               seq: m.seq, text: env.b, at: m.createdAt,
@@ -219,7 +267,13 @@ export class GroupSession {
       }
       this.cursor = m.seq;
     }
-    if (messages.length) await this.#persist();
+    if (messages.length) {
+      await this.#persist();
+      // Tell the server how far we've applied. This is the sole input to
+      // compaction — without it the log can never be pruned, because the
+      // server has no other way to know a message is safely delivered.
+      api.reportCursor(this.groupId, this.deviceId, this.cursor).catch(() => {});
+    }
     return { applied };
   }
 
@@ -235,7 +289,25 @@ export class GroupSession {
   /** Hand a late joiner the whole board in one message. */
   async sendCanvasSnapshot() {
     if (!this.client) return;
-    await this.#sendEnvelope({ t: T.Y_SNAPSHOT, u: b64(Y.encodeStateAsUpdate(this.doc)) });
+    this.updatesSinceSnapshot = 0;
+    const seq = await this.#sendEnvelope({ t: T.Y_SNAPSHOT, u: b64(Y.encodeStateAsUpdate(this.doc)) });
+    this.lastSnapshotSeq = seq;
+    return seq;
+  }
+
+  /**
+   * Respond to a peer's gap. Randomised delay, and skipped if a snapshot
+   * already landed while we waited — otherwise every member answers at once
+   * and the log gains N copies of the board while trying to shrink.
+   */
+  #answerSnapshotRequest() {
+    if (this.snapshotAnswerTimer) return;
+    const seenBefore = this.lastSnapshotSeq || 0;
+    this.snapshotAnswerTimer = setTimeout(async () => {
+      this.snapshotAnswerTimer = null;
+      if ((this.lastSnapshotSeq || 0) > seenBefore) return;   // someone beat us to it
+      try { await this.sendCanvasSnapshot(); } catch { /* next request will retry */ }
+    }, 400 + Math.floor(Math.random() * 1600));
   }
 
   /** Add another user by handle: claim their KeyPackage, commit, send Welcome. */

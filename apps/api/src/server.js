@@ -8,6 +8,7 @@ import { keyRoutes } from "./routes/keys.js";
 import { messageRoutes } from "./routes/messages.js";
 import { mlsRoutes } from "./routes/mls.js";
 import { liveRoutes } from "./routes/live.js";
+import { compactAll } from "./compaction.js";
 
 const app = Fastify({
   logger: { level: process.env.LOG_LEVEL || "info" },
@@ -52,7 +53,16 @@ app.setErrorHandler((err, req, reply) => {
   reply.code(status).send({ error: status >= 500 ? "internal_error" : err.message });
 });
 
+// Periodic compaction. Cheap: it only touches groups whose logs have grown,
+// and prunes strictly below the slowest active device.
+const COMPACT_MS = 5 * 60 * 1000;
+const compactTimer = setInterval(() => {
+  compactAll(app.log).catch((err) => app.log.error({ err }, "compaction sweep failed"));
+}, COMPACT_MS);
+compactTimer.unref();
+
 const close = async () => {
+  clearInterval(compactTimer);
   app.log.info("shutting down");
   await app.close();
   await pool.end();

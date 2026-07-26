@@ -13,6 +13,7 @@ export const T = {
   CHAT: "c",      // { t:'c', b: text }
   Y_UPDATE: "y",  // { t:'y', u: base64(Yjs update) }
   Y_SNAPSHOT: "s",// { t:'s', u: base64(full Yjs state) } — for members who joined late
+  Y_REQUEST: "r", // { t:'r' } — "I have a gap, someone publish the board"
 };
 
 export function encodeEnvelope(obj) {
