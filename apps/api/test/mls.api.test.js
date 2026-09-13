@@ -189,6 +189,24 @@ assert.equal(await A.apply(ct2), MSG2, "alice could not read bob's message");
 assert.equal(await C.apply(ct2), MSG2, "carol could not read bob's message");
 console.log("· one ciphertext decrypted by both alice and carol");
 
+// ------------------------------------------------------ owner removes carol
+
+const roster = await must(alice, "GET", `/api/mls/groups/${GID}/members`);
+assert.ok(roster.canRemove, "channel owner should be allowed to remove members");
+assert.ok(roster.members.some((m) => m.handle === "mls_carol"));
+
+const removeCarol = await A.removeMember("mls_carol");
+await must(alice, "POST", `/api/mls/groups/${GID}/messages`, {
+  kind: "commit", epoch: removeCarol.builtAtEpoch, senderDeviceId: aDev,
+  payload: b64(removeCarol.commit), removeHandle: "mls_carol",
+});
+const carolAfter = await api(carol, "GET", `/api/mls/groups/${GID}/messages`);
+assert.equal(carolAfter.status, 404, "removed member must lose delivery-service access atomically");
+const postRemoval = await A.encrypt("new epoch excludes carol");
+await assert.rejects(() => C.apply(postRemoval), /invalid|ghash|decrypt|epoch/i,
+  "old-epoch member must not decrypt post-removal traffic");
+console.log("· owner removal advanced MLS and revoked carol's server access");
+
 // ------------------------------------------------------------ authz check
 
 const outsider = await seedUser("mls_outsider");

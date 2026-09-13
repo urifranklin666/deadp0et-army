@@ -48,6 +48,20 @@ export const store = {
   set: (key, value) => withStore("readwrite", (s) => s.put(value, key)),
   del: (key) => withStore("readwrite", (s) => s.delete(key)),
   clear: () => withStore("readwrite", (s) => s.clear()),
+  entries: () => withStore("readonly", (s) => new Promise((resolve, reject) => {
+    const out = [];
+    const req = s.openCursor();
+    req.onsuccess = () => {
+      const cur = req.result;
+      if (!cur) return resolve(out);
+      out.push([cur.key, cur.value]);
+      cur.continue();
+    };
+    req.onerror = () => reject(req.error);
+  })),
+  import: (entries) => withStore("readwrite", (s) => {
+    for (const [key, value] of entries) s.put(value, key);
+  }),
 };
 
 /* ------------------------------------------------------------------ keys */

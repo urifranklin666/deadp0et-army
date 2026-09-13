@@ -1,16 +1,17 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
-  AlertTriangle, Check, Fingerprint, Hash, KeyRound, Loader2, LogOut, Plus,
-  MessageSquare, PenLine, RefreshCw, Send, Shield, Skull, UserPlus, X,
+  AlertTriangle, Check, Download, Fingerprint, Hash, KeyRound, Loader2, LogOut, Plus,
+  MessageSquare, PenLine, RefreshCw, Send, Settings, Shield, Skull, Upload, UserMinus, UserPlus, Users, Wifi, X,
 } from "lucide-react";
 import Canvas from "./Canvas.jsx";
 import { ConfirmModal, PromptModal } from "./Modal.jsx";
 import { api } from "./lib/api.js";
 import { store, K } from "./lib/db.js";
 import { GroupSession, SUITE, ensureDevice, login, register } from "./lib/session.js";
+import { downloadRecovery, exportRecovery, importRecovery } from "./lib/recovery.js";
 
 const SYNC_MS = 2500;
-const BUILD = "2026-07-26.6";
+const BUILD = "2026-08-06.1";
 
 /* ------------------------------------------------------------ primitives */
 
@@ -59,6 +60,49 @@ function Banner({ kind = "error", children, onClose }) {
       ) : null}
     </div>
   );
+}
+
+function RecoveryModal({ handle, onClose }) {
+  const [passphrase, setPassphrase] = useState("");
+  const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const [error, setError] = useState(null);
+  const exportNow = async () => {
+    setBusy("export"); setError(null);
+    try { downloadRecovery(await exportRecovery(handle, passphrase), handle); }
+    catch (e) { setError(e.message); }
+    finally { setBusy(null); }
+  };
+  const importNow = async () => {
+    if (!file) return;
+    setBusy("import"); setError(null);
+    try { await importRecovery(file, passphrase, handle); location.reload(); }
+    catch (e) { setError(e.message); setBusy(null); }
+  };
+  return <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4" role="dialog" aria-modal="true" aria-label="Device recovery">
+    <Glass className="w-full max-w-lg p-6">
+      <div className="flex items-center justify-between"><div><h2 className="text-sm font-bold text-white">Device recovery</h2><p className="mt-1 text-[11px] text-slate-500">Encrypted locally. The server never receives this file or passphrase.</p></div><button onClick={onClose} aria-label="Close"><X className="h-4 w-4"/></button></div>
+      <label className="mt-5 block text-[10px] uppercase tracking-widest text-slate-500">Recovery passphrase</label>
+      <input type="password" value={passphrase} onChange={e=>setPassphrase(e.target.value)} placeholder="12+ characters, stored nowhere" className="mt-2 w-full rounded-lg border border-white/10 bg-black/50 px-3 py-2.5 font-mono text-sm text-white outline-none focus:border-rose-500/60"/>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <button onClick={exportNow} disabled={passphrase.length<12||busy} className="rounded-lg border border-white/15 p-4 text-left disabled:opacity-40"><Download className="h-5 w-5 text-cyan-300"/><b className="mt-3 block text-sm">Export encrypted backup</b><span className="mt-1 block text-[10px] text-slate-500">Emergency replacement only. Retire the old copy before restoring.</span></button>
+        <label className="cursor-pointer rounded-lg border border-white/15 p-4"><Upload className="h-5 w-5 text-rose-300"/><b className="mt-3 block text-sm">Restore backup</b><span className="mt-1 block truncate text-[10px] text-slate-500">{file?.name||"Choose a .dpr file"}</span><input type="file" accept=".dpr,application/json" className="hidden" onChange={e=>setFile(e.target.files?.[0]||null)}/></label>
+      </div>
+      {error?<div className="mt-4"><Banner>{error}</Banner></div>:null}
+      <div className="mt-5 flex items-center justify-between"><p className="max-w-xs text-[10px] leading-relaxed text-amber-400">Restoring clones the MLS ratchet state. Never keep both copies active.</p><Button icon={Upload} busy={busy==="import"} disabled={!file||passphrase.length<12} onClick={importNow}>Restore</Button></div>
+    </Glass>
+  </div>;
+}
+
+function MembersModal({ session, self, onClose, onRemoved }) {
+  const [data,setData]=useState(null),[busy,setBusy]=useState(null),[error,setError]=useState(null);
+  useEffect(()=>{session.members().then(setData).catch(e=>setError(e.message));},[session]);
+  const remove=async(handle)=>{setBusy(handle);setError(null);try{const n=await session.removeMember(handle);setData(await session.members());onRemoved(`${handle} removed (${n} MLS leaf${n===1?"":"s"}); epoch advanced.`);}catch(e){setError(e.message);}finally{setBusy(null);}};
+  return <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4" role="dialog" aria-modal="true" aria-label="Room members"><Glass className="w-full max-w-lg p-6">
+    <div className="flex items-center justify-between"><div><h2 className="text-sm font-bold text-white">Room members</h2><p className="mt-1 text-[11px] text-slate-500">Database access and authenticated MLS leaves.</p></div><button onClick={onClose} aria-label="Close"><X className="h-4 w-4"/></button></div>
+    <div className="mt-5 divide-y divide-white/10 border-y border-white/10">{!data?<p className="py-5 text-xs text-slate-500">Loading roster…</p>:data.members.map(m=><div key={m.handle} className="flex items-center gap-3 py-3"><span className="flex h-8 w-8 items-center justify-center rounded-full bg-white/5 font-mono text-xs text-rose-300">{m.handle.slice(0,2).toUpperCase()}</span><div><b className="block text-sm text-white">@{m.handle}{m.handle===self?" (you)":""}</b><span className="text-[10px] text-slate-500">{m.role} · {m.devices} registered device{m.devices===1?"":"s"}</span></div>{data.canRemove&&m.role!=="owner"?<button onClick={()=>remove(m.handle)} disabled={busy} className="ml-auto rounded p-2 text-slate-500 hover:bg-rose-500/10 hover:text-rose-300" aria-label={`Remove ${m.handle}`}>{busy===m.handle?<Loader2 className="h-4 w-4 animate-spin"/>:<UserMinus className="h-4 w-4"/>}</button>:null}</div>)}</div>
+    {error?<div className="mt-4"><Banner>{error}</Banner></div>:null}<p className="mt-4 text-[10px] leading-relaxed text-slate-600">Removal publishes an MLS remove commit before server access is revoked. The removed member cannot derive the new epoch.</p>
+  </Glass></div>;
 }
 
 /* ------------------------------------------------------------- auth gate */
@@ -322,6 +366,10 @@ function App() {
         <div className="ml-auto flex items-center gap-3">
           <span className="hidden font-mono text-[10px] text-slate-600 sm:inline">build {BUILD}</span>
           <span className="font-mono text-[11px] text-slate-500">@{handle}</span>
+          <button onClick={() => setModal({ kind: "recovery" })}
+            className="rounded-lg border border-white/10 p-1.5 text-slate-400 hover:text-white" aria-label="Device recovery">
+            <Settings className="h-4 w-4" />
+          </button>
           <button
             onClick={async () => { await api.logout(); location.reload(); }}
             className="rounded-lg border border-white/10 p-1.5 text-slate-400 hover:text-white"
@@ -368,7 +416,7 @@ function App() {
             </div>
           ) : null}
           {active ? (
-            <Conversation session={active} onError={setErr} onChange={bump} openModal={setModal} />
+            <Conversation session={active} self={handle} onError={setErr} onChange={bump} openModal={setModal} />
           ) : <EmptyState />}
         </main>
       </div>
@@ -413,6 +461,8 @@ function App() {
           onClose={() => setModal(null)}
         />
       ) : null}
+      {modal?.kind === "recovery" ? <RecoveryModal handle={handle} onClose={() => setModal(null)} /> : null}
+      {modal?.kind === "members" ? <MembersModal session={modal.session} self={handle} onClose={() => setModal(null)} onRemoved={(msg) => { setNotice(msg); bump(); }} /> : null}
     </div>
   );
 }
@@ -432,7 +482,7 @@ function EmptyState() {
   );
 }
 
-function Conversation({ session, onError, onChange, openModal }) {
+function Conversation({ session, self, onError, onChange, openModal }) {
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(null);
   const [mode, setMode] = useState(session.channel.kind === "canvas" ? "canvas" : "chat");
@@ -453,6 +503,9 @@ function Conversation({ session, onError, onChange, openModal }) {
   };
 
   const invite = () => openModal({ kind: "invite", session });
+  const roster = () => openModal({ kind: "members", session });
+  const syncLabel = session.syncStatus === "syncing" ? "syncing" : session.syncStatus === "error" ? "sync error" : session.syncStatus === "recovered" ? "recovered" : session.lastSyncedAt ? "synced" : "not synced";
+  const syncColor = session.syncStatus === "error" ? "text-rose-300" : session.syncStatus === "recovered" ? "text-amber-300" : "text-emerald-300";
 
   return (
     <>
@@ -474,6 +527,9 @@ function Conversation({ session, onError, onChange, openModal }) {
         </div>
 
         <div className="ml-auto flex items-center gap-2">
+          <span className={`hidden items-center gap-1.5 font-mono text-[10px] sm:inline-flex ${syncColor}`} title={session.lastSyncError || (session.lastSyncedAt ? `Last synced ${session.lastSyncedAt.toLocaleTimeString()}` : "Waiting for first sync")}>
+            {session.syncStatus === "syncing" ? <Loader2 className="h-3 w-3 animate-spin"/> : <Wifi className="h-3 w-3"/>}{syncLabel}
+          </span>
           <button onClick={async () => { try { await session.sync(); onChange(); } catch (e) { onError(e.message); } }}
             className="rounded p-1.5 text-slate-500 hover:bg-white/5 hover:text-white" aria-label="Sync">
             <RefreshCw className="h-3.5 w-3.5" />
@@ -482,6 +538,7 @@ function Conversation({ session, onError, onChange, openModal }) {
             onClick={invite} className="!px-3 !py-1.5 !text-xs">
             Invite
           </Button>
+          <button onClick={roster} disabled={!joined} className="rounded p-1.5 text-slate-500 hover:bg-white/5 hover:text-white disabled:opacity-40" aria-label="Room members"><Users className="h-4 w-4"/></button>
         </div>
       </div>
 

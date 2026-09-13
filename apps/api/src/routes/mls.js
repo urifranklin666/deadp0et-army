@@ -142,6 +142,21 @@ export async function mlsRoutes(app) {
     return { groupId: b64(g.group_id), epoch: Number(g.epoch), ciphersuite: g.ciphersuite, channelId: g.channel_id };
   });
 
+  app.get("/api/mls/groups/:groupId/members", { preHandler: requireSession }, async (req, reply) => {
+    const g = await groupMembership(req.user.id, req.params.groupId);
+    if (!g) return reply.code(404).send({ error: "no such group" });
+    const { rows } = await q(
+      `SELECT u.handle, cm.role, count(d.id)::int AS devices, max(d.last_seen_at) AS last_seen_at
+         FROM channel_members cm
+         JOIN users u ON u.id = cm.user_id
+         LEFT JOIN devices d ON d.user_id = u.id
+        WHERE cm.channel_id = $1
+        GROUP BY u.id, u.handle, cm.role
+        ORDER BY CASE cm.role WHEN 'owner' THEN 0 ELSE 1 END, u.handle`, [g.channel_id]);
+    const own = rows.find((r) => r.handle === req.user.handle);
+    return { members: rows.map((r) => ({ handle: r.handle, role: r.role, devices: r.devices, lastSeenAt: r.last_seen_at })), canRemove: own?.role === "owner" };
+  });
+
   // -------------------------------------------------------------- messages
 
   /**
@@ -153,7 +168,7 @@ export async function mlsRoutes(app) {
    * a second, divergent history. The loser re-fetches and rebuilds.
    */
   app.post("/api/mls/groups/:groupId/messages", { preHandler: requireSession }, async (req, reply) => {
-    const { kind, payload, epoch, senderDeviceId, welcomes, retentionDays } = req.body || {};
+    const { kind, payload, epoch, senderDeviceId, welcomes, retentionDays, removeHandle } = req.body || {};
     if (!["application", "commit", "proposal"].includes(kind)) {
       return reply.code(400).send({ error: "kind must be application|commit|proposal" });
     }
@@ -212,6 +227,18 @@ export async function mlsRoutes(app) {
              SELECT $1, d.user_id, 'member' FROM devices d WHERE d.id = $2
              ON CONFLICT (channel_id, user_id) DO NOTHING`,
             [g.channel_id, w.deviceId]);
+        }
+        if (kind === "commit" && removeHandle) {
+          const owner = await c.query(
+            `SELECT 1 FROM channel_members WHERE channel_id=$1 AND user_id=$2 AND role='owner'`,
+            [g.channel_id, req.user.id]);
+          if (!owner.rowCount) throw Object.assign(new Error("only the room owner can remove members"), { statusCode: 403 });
+          if (removeHandle === req.user.handle) throw Object.assign(new Error("the owner cannot remove themselves"), { statusCode: 400 });
+          const removed = await c.query(
+            `DELETE FROM channel_members cm USING users u
+              WHERE cm.channel_id=$1 AND cm.user_id=u.id AND u.handle=$2 AND cm.role <> 'owner'`,
+            [g.channel_id, String(removeHandle)]);
+          if (!removed.rowCount) throw Object.assign(new Error("no removable member with that handle"), { statusCode: 404 });
         }
         return { seq, epoch: writeEpoch };
       });

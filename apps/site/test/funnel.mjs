@@ -1,8 +1,8 @@
 /**
  * The marketing site must actually hand off to the live console.
  *
- * Also guards the honesty split: the in-page telemetry view is a simulation,
- * and now that a real console exists the two must not be confusable.
+ * Also guards the honesty split: the marketing page must describe what the
+ * repository actually implements and must keep the audit warning visible.
  */
 import { chromium } from "playwright";
 import assert from "node:assert/strict";
@@ -42,23 +42,14 @@ await page.getByRole("link", { name: /^Open console$/i }).first().click();
 await page.waitForURL(/\/app\/?$/, { timeout: 60000 });
 console.log("· nav CTA lands on the console");
 
-// The pricing stepper's final CTA is the conversion point.
+// The proof panel describes the actual trust model, not fictional infrastructure.
 await page.goto(ORIGIN + "/", { waitUntil: "networkidle" });
-// It only renders on the stepper's last step, so walk there first.
-await page.getByRole("button", { name: /Confirm/ }).first().click();
-await page.getByRole("link", { name: /Open the console —/ }).waitFor({ timeout: 30000 });
-const priced = await page.getByRole("link", { name: /Open the console —/ }).getAttribute("href");
-assert.equal(priced, "/app/", "the priced CTA should link to the console");
-console.log("· pricing CTA points at the console");
-
-// The simulated dashboard must not present itself as the real console.
-await page.getByRole("button", { name: "Demo", exact: true }).click();
-await page.getByText("Perimeter telemetry").waitFor({ timeout: 30000 });
-const blurb = await page.getByText(/Simulated stream/).innerText();
-assert.match(blurb, /generated in your browser/i, "the demo must say it is simulated");
-assert.ok(!/^Ops console$/i.test(await page.getByText(/Telemetry demo/i).first().innerText()),
-  "the mock should be labelled a demo");
-console.log("· telemetry view is labelled a demo and links out to the real console");
+await page.getByRole("button", { name: /Post-quantum MLS/i }).click();
+await page.getByText(/ML-KEM1024 \+ ML-DSA87/).waitFor({ timeout: 30000 });
+await page.getByText(/not audited/i).first().waitFor({ timeout: 30000 });
+assert.equal(await page.getByText(/42 relay jurisdictions/i).count(), 0,
+  "the page must not claim fictional relay infrastructure");
+console.log("· proof panel and audit warning are honest");
 
 // Mobile: the console link is reachable without a desktop nav.
 const m = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });

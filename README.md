@@ -72,6 +72,18 @@ key from the MLS exporter (RFC 9420 §8.5) — same key for every member of an
 epoch, new key on epoch change — and relayed over a WebSocket that persists
 nothing.
 
+**Recovery files are client-only encrypted state.** The console exports the
+current handle's IndexedDB records as a `.dpr` bundle encrypted with AES-256-GCM
+under a PBKDF2-SHA256 key (310,000 iterations). The passphrase and plaintext
+bundle never leave the browser. Restore is emergency device replacement, not
+multi-device sync: keeping both copies active would clone an MLS ratchet.
+
+**Member removal is an MLS operation, not a database toggle.** An owner creates
+a remove commit for every leaf authenticated as the target handle. The delivery
+service stores that commit, advances the guarded epoch, and revokes channel
+membership in one transaction. The removed client cannot fetch the transition
+commit and its old epoch cannot decrypt subsequent traffic.
+
 ## Development
 
 ```bash
@@ -103,6 +115,7 @@ against the live origin with a CDP virtual WebAuthn authenticator.
 ```bash
 node apps/api/test/e2ee.test.js         # PQXDH handshake + relay
 node apps/api/test/mls.api.test.js      # delivery service + fork guard
+node packages/crypto/test/remove.test.js # removal excludes the old epoch
 node apps/api/test/compaction.test.js   # prune safety
 node apps/web/test/e2e.mjs              # passkey → channel → message → reload
 node apps/web/test/canvas.mjs           # CRDT convergence, late-joiner snapshot

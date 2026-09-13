@@ -83,6 +83,9 @@ export class GroupSession {
     this.client = null;
     this.cursor = 0;
     this.history = [];
+    this.syncStatus = "idle";
+    this.lastSyncedAt = null;
+    this.lastSyncError = null;
 
     // Shared canvas state. Yjs is a CRDT, so updates are commutative and
     // idempotent — out-of-order or duplicated delivery converges anyway,
@@ -94,6 +97,7 @@ export class GroupSession {
   }
 
   get epoch() { return this.client ? this.client.epoch : null; }
+  get mlsMembers() { return this.client?.members() || []; }
 
   #wireDoc() {
     this.doc.on("update", (update, origin) => {
@@ -231,11 +235,17 @@ export class GroupSession {
   /** Pull new log entries and apply them in order. */
   async sync() {
     if (!this.client) return { applied: 0 };
-    const res = await api.messages(this.groupId, this.cursor);
+    this.syncStatus = "syncing";
+    this.lastSyncError = null;
+    let res;
+    try { res = await api.messages(this.groupId, this.cursor); }
+    catch (e) { this.syncStatus = "error"; this.lastSyncError = e.message; throw e; }
     const { messages } = res;
     if (res.gap) {
       await this.#recoverFromGap(Number(res.watermark || 0));
       this.onCanvasChange?.();
+      this.syncStatus = "recovered";
+      this.lastSyncedAt = new Date();
       return { applied: 0, recovered: true };
     }
     let applied = 0;
@@ -274,6 +284,8 @@ export class GroupSession {
       // server has no other way to know a message is safely delivered.
       api.reportCursor(this.groupId, this.deviceId, this.cursor).catch(() => {});
     }
+    this.syncStatus = "synced";
+    this.lastSyncedAt = new Date();
     return { applied };
   }
 
@@ -328,5 +340,18 @@ export class GroupSession {
     await this.sendCanvasSnapshot();
     await this.#persist();
     return keyPackages.length;
+  }
+
+  async members() { return api.groupMembers(this.groupId); }
+
+  /** MLS remove commit first; server membership is revoked atomically with it. */
+  async removeMember(handle) {
+    const removal = await this.client.removeMember(handle);
+    await api.postMessage(this.groupId, {
+      kind: "commit", epoch: removal.builtAtEpoch, senderDeviceId: this.deviceId,
+      payload: b64(removal.commit), removeHandle: handle,
+    });
+    await this.#persist();
+    return removal.removedLeaves;
   }
 }

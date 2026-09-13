@@ -40,6 +40,7 @@ export const api = {
   createGroup: (channelId, groupId, ciphersuite) =>
     call("POST", "/api/mls/groups", { channelId, groupId, ciphersuite }),
   group: (groupId) => call("GET", `/api/mls/groups/${encodeURIComponent(groupId)}`),
+  groupMembers: (groupId) => call("GET", `/api/mls/groups/${encodeURIComponent(groupId)}/members`),
   postMessage: (groupId, payload) =>
     call("POST", `/api/mls/groups/${encodeURIComponent(groupId)}/messages`, payload),
   messages: (groupId, since) =>

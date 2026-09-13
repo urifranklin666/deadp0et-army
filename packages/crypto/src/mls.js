@@ -107,6 +107,19 @@ export class MlsClient {
   get epoch() { return this.#state ? Number(this.#state.groupContext.epoch) : null; }
   get groupId() { return this.#state ? this.#state.groupContext.groupId : null; }
 
+  /** Public roster derived from the authenticated MLS ratchet tree. */
+  members() {
+    if (!this.#state) return [];
+    const out = [];
+    for (let nodeIndex = 0; nodeIndex < this.#state.ratchetTree.length; nodeIndex += 2) {
+      const node = this.#state.ratchetTree[nodeIndex];
+      const credential = node?.nodeType === "leaf" ? node.leaf.credential : null;
+      if (credential?.credentialType !== "basic") continue;
+      out.push({ leafIndex: nodeIndex / 2, identity: fromUtf8(credential.identity) });
+    }
+    return out;
+  }
+
   /** Generate a KeyPackage and keep its private half locally. */
   async newKeyPackage() {
     const kp = await generateKeyPackage(
@@ -146,6 +159,19 @@ export class MlsClient {
       commit: encodeMlsMessage(res.commit),
       welcome: res.welcome ? encodeMlsMessage({ version: MLS_VERSION, wireformat: "mls_welcome", welcome: res.welcome }) : null,
     };
+  }
+
+  /** Remove every device leaf authenticated as `identity`, advancing epoch. */
+  async removeMember(identity) {
+    const leaves = this.members().filter((m) => m.identity === identity);
+    if (!leaves.length) throw new Error(`no MLS member named ${identity}`);
+    if (identity === this.identity) throw new Error("use leave-room flow to remove this device");
+    const builtAtEpoch = this.epoch;
+    const res = await createCommit(
+      { state: this.#state, cipherSuite: this.#cs },
+      { extraProposals: leaves.map((m) => ({ proposalType: "remove", remove: { removed: m.leafIndex } })) });
+    this.#state = res.newState;
+    return { builtAtEpoch, commit: encodeMlsMessage(res.commit), removedLeaves: leaves.length };
   }
 
   /** Join from a Welcome produced by someone else's add commit. */
