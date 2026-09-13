@@ -4,10 +4,14 @@ import {
   generateAuthenticationOptions, verifyAuthenticationResponse,
 } from "@simplewebauthn/server";
 import { q, tx } from "../db.js";
+import { HANDLE, UUID, obj } from "../schemas.js";
 
 const RP_ID = process.env.RP_ID || "localhost";
 const RP_ORIGIN = process.env.RP_ORIGIN || "http://localhost";
 const SESSION_TTL_DAYS = 30;
+// Registration and sign-in are the endpoints worth brute-forcing or spamming;
+// hold them well below the global limit.
+const AUTH_LIMIT = { rateLimit: { max: 20, timeWindow: "1 minute" } };
 
 // Challenges are short-lived and single-use; keeping them in-process is fine
 // for one node and avoids putting them anywhere they could be replayed from.
@@ -53,8 +57,11 @@ export async function requireSession(req, reply) {
 
 export async function authRoutes(app) {
   // --- registration ---
-  app.post("/api/auth/register/start", async (req, reply) => {
-    const handle = String(req.body?.handle || "").toLowerCase().trim();
+  app.post("/api/auth/register/start", {
+    config: AUTH_LIMIT,
+    schema: { body: obj({ handle: { type: "string", maxLength: 64 } }, ["handle"]) },
+  }, async (req, reply) => {
+    const handle = String(req.body.handle).toLowerCase().trim();
     if (!/^[a-z0-9_]{3,32}$/.test(handle)) {
       return reply.code(400).send({ error: "handle must be 3-32 chars: a-z 0-9 _" });
     }
@@ -77,8 +84,11 @@ export async function authRoutes(app) {
     return { userId, options };
   });
 
-  app.post("/api/auth/register/finish", async (req, reply) => {
-    const { userId, response } = req.body || {};
+  app.post("/api/auth/register/finish", {
+    config: AUTH_LIMIT,
+    schema: { body: obj({ userId: UUID, response: { type: "object" } }, ["userId", "response"]) },
+  }, async (req, reply) => {
+    const { userId, response } = req.body;
     const pending = takeChallenge(`reg:${userId}`);
     if (!pending) return reply.code(400).send({ error: "challenge expired" });
 
@@ -108,8 +118,11 @@ export async function authRoutes(app) {
   });
 
   // --- authentication ---
-  app.post("/api/auth/login/start", async (req) => {
-    const handle = String(req.body?.handle || "").toLowerCase().trim();
+  app.post("/api/auth/login/start", {
+    config: AUTH_LIMIT,
+    schema: { body: obj({ handle: { type: "string", maxLength: 64 } }, ["handle"]) },
+  }, async (req) => {
+    const handle = String(req.body.handle).toLowerCase().trim();
     const { rows } = await q(
       `SELECT c.credential_id, c.transports FROM webauthn_credentials c
          JOIN users u ON u.id=c.user_id WHERE u.handle=$1`, [handle]);
@@ -127,8 +140,11 @@ export async function authRoutes(app) {
     return { options };
   });
 
-  app.post("/api/auth/login/finish", async (req, reply) => {
-    const { response, challenge } = req.body || {};
+  app.post("/api/auth/login/finish", {
+    config: AUTH_LIMIT,
+    schema: { body: obj({ response: { type: "object" }, challenge: { type: "string", maxLength: 256 } }, ["response", "challenge"]) },
+  }, async (req, reply) => {
+    const { response, challenge } = req.body;
     const pending = takeChallenge(`auth:${challenge}`);
     if (!pending) return reply.code(400).send({ error: "challenge expired" });
 

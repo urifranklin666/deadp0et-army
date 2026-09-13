@@ -2,7 +2,7 @@
   "name": "@deadp0et/crypto",
   "private": true,
   "type": "module",
-  "main": "src/index.js",
+  "main": "src/mls.js",
   "dependencies": {
     "@hpke/chacha20poly1305": "^1.8.0",
     "@hpke/core": "^1.9.0",
@@ -12,11 +12,10 @@
     "@noble/curves": "^2.2.0",
     "@noble/hashes": "^2.2.0",
     "@noble/post-quantum": "^0.6.1",
-    "@signalapp/libsignal-client": "^0.99.1",
     "ts-mls": "^1.6.2"
   },
   "exports": {
-    ".": "./src/index.js",
+    ".": "./src/mls.js",
     "./mls": "./src/mls.js"
   }
 }

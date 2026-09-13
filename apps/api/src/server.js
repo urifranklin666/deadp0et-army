@@ -9,6 +9,7 @@ import { messageRoutes } from "./routes/messages.js";
 import { mlsRoutes } from "./routes/mls.js";
 import { liveRoutes } from "./routes/live.js";
 import { compactAll } from "./compaction.js";
+import { SWEEP_MS, sweep } from "./sweeper.js";
 
 const app = Fastify({
   logger: { level: process.env.LOG_LEVEL || "info" },
@@ -40,12 +41,14 @@ app.get("/api/health", async () => {
 // Everything the client needs to know before authenticating.
 app.get("/api/meta", async () => ({
   rp_id: process.env.RP_ID,
-  protocol: "signal-double-ratchet",
+  protocol: "mls",
+  ciphersuite: "MLS_256_MLKEM1024_AES256GCM_SHA512_MLDSA87",
   transport: "https+ws",
 }));
 
 await app.register(authRoutes);
-await app.register(keyRoutes);
+// Signal key directory: no client speaks it yet, see routes/messages.js.
+if (process.env.ENABLE_SIGNAL_ROUTES === "1") await app.register(keyRoutes);
 await app.register(messageRoutes);
 await app.register(mlsRoutes);
 await app.register(liveRoutes);
@@ -65,13 +68,28 @@ const compactTimer = setInterval(() => {
 }, COMPACT_MS);
 compactTimer.unref();
 
+// Expired sessions, messages past their retention, delivered welcomes and
+// spent key packages are filtered on read but were never deleted.
+const sweepTimer = setInterval(() => {
+  sweep(app.log).catch((err) => app.log.error({ err }, "sweep failed"));
+}, SWEEP_MS);
+sweepTimer.unref();
+setTimeout(() => sweep(app.log).catch(() => {}), 30_000).unref();
+
+let closing = false;
 const close = async () => {
+  if (closing) return;
+  closing = true;
   clearInterval(compactTimer);
+  clearInterval(sweepTimer);
   app.log.info("shutting down");
+  // systemd gives us 90 s by default; do not let a stuck connection use it all.
+  setTimeout(() => process.exit(1), 10_000).unref();
   await app.close();
   await pool.end();
   process.exit(0);
 };
+process.on("unhandledRejection", (err) => { app.log.error({ err }, "unhandled rejection"); });
 process.on("SIGTERM", close);
 process.on("SIGINT", close);
 

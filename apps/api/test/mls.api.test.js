@@ -9,6 +9,7 @@ import crypto from "node:crypto";
 import assert from "node:assert/strict";
 import { MlsClient, SUITE, b64, unb64 } from "../../../packages/crypto/src/mls.js";
 import { q, pool } from "../src/db.js";
+import { sweep } from "../src/sweeper.js";
 
 const BASE = process.env.BASE || "http://127.0.0.1:8790";
 const sha256 = (s) => crypto.createHash("sha256").update(s).digest();
@@ -156,6 +157,15 @@ console.log("· bob replayed the log and decrypted:", JSON.stringify(received));
 
 // --------------------------------------------------- growing to 3 members
 
+// Malformed input is a 400 with a reason, never a 500 from Postgres.
+const badId = await api(alice, "GET", `/api/mls/devices/not-a-uuid/welcomes`);
+assert.equal(badId.status, 400, `non-uuid device id should be 400, got ${badId.status}`);
+const badLimit = await api(alice, "GET", `/api/mls/groups/${GID}/messages?limit=abc`);
+assert.equal(badLimit.status, 400, `non-integer limit should be 400, got ${badLimit.status}`);
+const badKind = await api(alice, "POST", `/api/mls/groups/${GID}/messages`, { kind: "nope", payload: "AAAA", senderDeviceId: aDev });
+assert.equal(badKind.status, 400);
+console.log("· malformed ids, query values and bodies are rejected with 400");
+
 // A stranger to the group cannot claim into it, and a member cannot smuggle a
 // Welcome onto an application message or onto a commit for a package someone
 // else claimed: both are how a removed user could be re-granted log access.
@@ -213,6 +223,25 @@ await must(bob, "POST", `/api/mls/groups/${GID}/messages`, {
 assert.equal(await A.apply(ct2), MSG2, "alice could not read bob's message");
 assert.equal(await C.apply(ct2), MSG2, "carol could not read bob's message");
 console.log("· one ciphertext decrypted by both alice and carol");
+
+// A commit never gets an expiry, whatever the sender asks for.
+const ttlCommit = await q("SELECT expires_at FROM mls_messages WHERE seq=$1", [carolCommit.seq]);
+assert.equal(ttlCommit.rows[0].expires_at, null);
+const ttlMsg = await must(bob, "POST", `/api/mls/groups/${GID}/messages`, {
+  kind: "application", senderDeviceId: bDev, payload: b64(await B.encrypt("short-lived")), retentionDays: 1,
+});
+const ttlRow = await q("SELECT expires_at FROM mls_messages WHERE seq=$1", [ttlMsg.seq]);
+assert.ok(ttlRow.rows[0].expires_at, "an application message with retentionDays gets an expiry");
+await q("UPDATE mls_messages SET expires_at = now() - interval '1 minute' WHERE seq=$1", [ttlMsg.seq]);
+await q("INSERT INTO sessions(user_id, token_hash, expires_at) VALUES ($1, $2, now() - interval '1 day')", [alice.id, sha256("stale-" + Date.now())]);
+const swept = await sweep();
+assert.ok(swept.mls_messages >= 1, "sweeper removes expired application messages");
+assert.ok(swept.sessions >= 1, "sweeper removes expired sessions");
+assert.equal((await q("SELECT 1 FROM mls_messages WHERE seq=$1", [ttlMsg.seq])).rowCount, 0);
+for (const m of (await must(alice, "GET", `/api/mls/groups/${GID}/messages?since=${carolCommit.seq}`)).messages) {
+  if (m.senderDeviceId !== aDev) await A.apply(unb64(m.payload)).catch(() => {});
+}
+console.log("· commits never expire; sweeper deletes expired messages and sessions");
 
 // ------------------------------------------------------ owner removes carol
 

@@ -1,12 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
-  AlertTriangle, Check, Download, Fingerprint, Hash, KeyRound, Loader2, LogOut, Plus,
+  AlertTriangle, Download, Fingerprint, Hash, KeyRound, Loader2, LogOut, Plus,
   MessageSquare, PenLine, RefreshCw, Send, Settings, Shield, Skull, Upload, UserMinus, UserPlus, Users, Wifi, X,
 } from "lucide-react";
 import Canvas from "./Canvas.jsx";
 import { ConfirmModal, PromptModal } from "./Modal.jsx";
 import { api } from "./lib/api.js";
-import { store, K } from "./lib/db.js";
 import { GroupSession, SUITE, ensureDevice, login, register } from "./lib/session.js";
 import { downloadRecovery, exportRecovery, importRecovery } from "./lib/recovery.js";
 

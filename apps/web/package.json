@@ -9,19 +9,10 @@
   },
   "dependencies": {
     "@deadp0et/crypto": "workspace:*",
-    "@hpke/chacha20poly1305": "^1.8.0",
-    "@hpke/core": "^1.9.0",
-    "@hpke/dhkem-x25519": "^1.8.0",
-    "@hpke/ml-kem": "^0.3.0",
-    "@noble/ciphers": "^2.2.0",
-    "@noble/curves": "^2.2.0",
-    "@noble/hashes": "^2.2.0",
-    "@noble/post-quantum": "^0.6.1",
     "@simplewebauthn/browser": "^13.3.0",
     "lucide-react": "^1.26.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "ts-mls": "^1.6.2",
     "yjs": "^13.6.31"
   },
   "devDependencies": {

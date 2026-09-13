@@ -1,11 +1,18 @@
 import { q, tx } from "../db.js";
 import { requireSession } from "./auth.js";
+import { kickFromLive } from "./live.js";
+import { B64, GROUP_ID, HANDLE, SUITE_NAME, UUID, obj } from "../schemas.js";
 
 const b64 = (buf) => Buffer.from(buf).toString("base64");
 const unb64 = (s) => Buffer.from(String(s), "base64");
 const MAX_PAYLOAD = 512 * 1024;
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_WELCOMES = 100;
+const MAX_PAYLOAD_B64 = Math.ceil(MAX_PAYLOAD / 3) * 4;
+const groupParams = obj({ groupId: GROUP_ID }, ["groupId"]);
+const deviceParams = obj({ id: UUID }, ["id"]);
+const WELCOME = obj({
+  ref: B64(64), deviceId: UUID, welcome: B64(MAX_PAYLOAD_B64), ratchetTree: B64(1_400_000),
+}, ["ref", "deviceId", "welcome"]);
 // Claims burn a single-use KeyPackage on someone else's device; keep the
 // blast radius of an abusive account small even though it is authenticated.
 const CLAIM_LIMIT = { rateLimit: { max: 30, timeWindow: "1 minute" } };
@@ -39,9 +46,11 @@ export async function mlsRoutes(app) {
    * here holds the MLS credential identity, not a Signal identity key — the
    * column is shared, the protocols are not.
    */
-  app.post("/api/mls/devices", { preHandler: requireSession }, async (req, reply) => {
-    const { name, identity } = req.body || {};
-    if (!identity) return reply.code(400).send({ error: "identity required" });
+  app.post("/api/mls/devices", {
+    preHandler: requireSession,
+    schema: { body: obj({ name: { type: "string", maxLength: 64 }, identity: B64(8192) }, ["identity"]) },
+  }, async (req, reply) => {
+    const { name, identity } = req.body;
     const idBytes = unb64(identity);
     if (idBytes.length > 4096) return reply.code(400).send({ error: "identity too large" });
 
@@ -63,13 +72,14 @@ export async function mlsRoutes(app) {
 
   // ---------------------------------------------------------- key packages
 
-  app.post("/api/mls/key-packages", { preHandler: requireSession }, async (req, reply) => {
-    const { deviceId, ciphersuite, keyPackages } = req.body || {};
-    const items = Array.isArray(keyPackages) ? keyPackages : [];
-    if (!ciphersuite || !items.length) {
-      return reply.code(400).send({ error: "ciphersuite and keyPackages required" });
-    }
-    if (items.length > 100) return reply.code(400).send({ error: "max 100 key packages per upload" });
+  app.post("/api/mls/key-packages", {
+    preHandler: requireSession,
+    schema: { body: obj({
+      deviceId: UUID, ciphersuite: SUITE_NAME,
+      keyPackages: { type: "array", minItems: 1, maxItems: 100, items: obj({ ref: B64(64), keyPackage: B64(65536) }, ["ref", "keyPackage"]) },
+    }, ["deviceId", "ciphersuite", "keyPackages"]) },
+  }, async (req, reply) => {
+    const { deviceId, ciphersuite, keyPackages: items } = req.body;
     const dev = await ownedDevice(req.user.id, deviceId);
     if (!dev) return reply.code(404).send({ error: "no such device" });
 
@@ -95,10 +105,14 @@ export async function mlsRoutes(app) {
   // caller belongs to, so it requires that group: without it any account could
   // drain any user's packages and make them un-invitable. The claimer is
   // recorded so the Welcome on the add commit can be tied back to this claim.
-  app.get("/api/mls/key-packages/:handle", { preHandler: requireSession, config: CLAIM_LIMIT }, async (req, reply) => {
-    const suite = req.query?.ciphersuite;
-    if (!suite) return reply.code(400).send({ error: "ciphersuite query param required" });
-    if (!req.query?.groupId) return reply.code(400).send({ error: "groupId query param required" });
+  app.get("/api/mls/key-packages/:handle", {
+    preHandler: requireSession, config: CLAIM_LIMIT,
+    schema: {
+      params: obj({ handle: HANDLE }, ["handle"]),
+      querystring: obj({ ciphersuite: SUITE_NAME, groupId: GROUP_ID }, ["ciphersuite", "groupId"]),
+    },
+  }, async (req, reply) => {
+    const suite = req.query.ciphersuite;
     const g = await groupMembership(req.user.id, req.query.groupId);
     if (!g) return reply.code(404).send({ error: "no such group" });
 
@@ -128,11 +142,11 @@ export async function mlsRoutes(app) {
 
   // ---------------------------------------------------------------- groups
 
-  app.post("/api/mls/groups", { preHandler: requireSession }, async (req, reply) => {
-    const { channelId, groupId, ciphersuite } = req.body || {};
-    if (!channelId || !groupId || !ciphersuite) {
-      return reply.code(400).send({ error: "channelId, groupId and ciphersuite required" });
-    }
+  app.post("/api/mls/groups", {
+    preHandler: requireSession,
+    schema: { body: obj({ channelId: UUID, groupId: GROUP_ID, ciphersuite: SUITE_NAME }, ["channelId", "groupId", "ciphersuite"]) },
+  }, async (req, reply) => {
+    const { channelId, groupId, ciphersuite } = req.body;
     const member = await q(
       "SELECT 1 FROM channel_members WHERE channel_id=$1 AND user_id=$2", [channelId, req.user.id]);
     if (!member.rowCount) return reply.code(403).send({ error: "not a member of that channel" });
@@ -149,13 +163,13 @@ export async function mlsRoutes(app) {
     }
   });
 
-  app.get("/api/mls/groups/:groupId", { preHandler: requireSession }, async (req, reply) => {
+  app.get("/api/mls/groups/:groupId", { preHandler: requireSession, schema: { params: groupParams } }, async (req, reply) => {
     const g = await groupMembership(req.user.id, req.params.groupId);
     if (!g) return reply.code(404).send({ error: "no such group" });
     return { groupId: b64(g.group_id), epoch: Number(g.epoch), ciphersuite: g.ciphersuite, channelId: g.channel_id };
   });
 
-  app.get("/api/mls/groups/:groupId/members", { preHandler: requireSession }, async (req, reply) => {
+  app.get("/api/mls/groups/:groupId/members", { preHandler: requireSession, schema: { params: groupParams } }, async (req, reply) => {
     const g = await groupMembership(req.user.id, req.params.groupId);
     if (!g) return reply.code(404).send({ error: "no such group" });
     const { rows } = await q(
@@ -180,12 +194,22 @@ export async function mlsRoutes(app) {
    * that epoch, zero rows update and we reject with 409 rather than accepting
    * a second, divergent history. The loser re-fetches and rebuilds.
    */
-  app.post("/api/mls/groups/:groupId/messages", { preHandler: requireSession }, async (req, reply) => {
-    const { kind, payload, epoch, senderDeviceId, welcomes, retentionDays, removeHandle } = req.body || {};
-    if (!["application", "commit", "proposal"].includes(kind)) {
-      return reply.code(400).send({ error: "kind must be application|commit|proposal" });
-    }
-    if (!payload) return reply.code(400).send({ error: "payload required" });
+  app.post("/api/mls/groups/:groupId/messages", {
+    preHandler: requireSession,
+    schema: {
+      params: groupParams,
+      body: obj({
+        kind: { type: "string", enum: ["application", "commit", "proposal"] },
+        payload: B64(MAX_PAYLOAD_B64),
+        epoch: { type: "integer", minimum: 0 },
+        senderDeviceId: UUID,
+        welcomes: { type: "array", maxItems: MAX_WELCOMES, items: WELCOME },
+        retentionDays: { type: "number", minimum: 0, maximum: 3650 },
+        removeHandle: HANDLE,
+      }, ["kind", "payload", "senderDeviceId"]),
+    },
+  }, async (req, reply) => {
+    const { kind, payload, epoch, senderDeviceId, welcomes, retentionDays, removeHandle } = req.body;
     const body = unb64(payload);
     if (body.length > MAX_PAYLOAD) return reply.code(413).send({ error: "payload too large" });
 
@@ -197,21 +221,19 @@ export async function mlsRoutes(app) {
     // Welcomes grant channel membership, so they are accepted only where MLS
     // itself grants group membership: on a commit, for a KeyPackage this
     // caller claimed for exactly that device.
-    const ws = Array.isArray(welcomes) ? welcomes : [];
+    const ws = welcomes ?? [];
     if (ws.length && kind !== "commit") return reply.code(400).send({ error: "welcomes ride only on commits" });
-    if (ws.length > MAX_WELCOMES) return reply.code(400).send({ error: `max ${MAX_WELCOMES} welcomes per commit` });
-    for (const w of ws) {
-      if (!w || !UUID_RE.test(String(w.deviceId)) || !w.ref || !w.welcome) {
-        return reply.code(400).send({ error: "each welcome needs deviceId, ref and welcome" });
-      }
-    }
 
+    // Commits never expire: compaction keeps them for the epoch chain, and a
+    // retention policy that silently dropped one would strand every device
+    // that had not yet applied it.
     const ttl = Number(retentionDays);
-    const expires = Number.isFinite(ttl) && ttl > 0 ? new Date(Date.now() + ttl * 864e5) : null;
+    const expires = kind !== "commit" && Number.isFinite(ttl) && ttl > 0 ? new Date(Date.now() + ttl * 864e5) : null;
 
     try {
-      return await tx(async (c) => {
+      const result = await tx(async (c) => {
         let writeEpoch = Number(g.epoch);
+        let removedUserId = null;
 
         if (kind === "commit") {
           if (!Number.isInteger(epoch)) {
@@ -267,12 +289,18 @@ export async function mlsRoutes(app) {
           if (removeHandle === req.user.handle) throw Object.assign(new Error("the owner cannot remove themselves"), { statusCode: 400 });
           const removed = await c.query(
             `DELETE FROM channel_members cm USING users u
-              WHERE cm.channel_id=$1 AND cm.user_id=u.id AND u.handle=$2 AND cm.role <> 'owner'`,
+              WHERE cm.channel_id=$1 AND cm.user_id=u.id AND u.handle=$2 AND cm.role <> 'owner'
+              RETURNING cm.user_id`,
             [g.channel_id, String(removeHandle)]);
           if (!removed.rowCount) throw Object.assign(new Error("no removable member with that handle"), { statusCode: 404 });
+          removedUserId = removed.rows[0].user_id;
         }
-        return { seq, epoch: writeEpoch };
+        return { seq, epoch: writeEpoch, removedUserId };
       });
+      // Membership is gone; close the presence sockets the removed user still
+      // holds so they cannot keep injecting frames into the room.
+      if (result.removedUserId) kickFromLive(g.group_id, result.removedUserId);
+      return { seq: result.seq, epoch: result.epoch };
     } catch (e) {
       if (e.statusCode) return reply.code(e.statusCode).send({ error: e.message });
       // The partial unique index is the backstop if the guard is ever bypassed.
@@ -282,11 +310,16 @@ export async function mlsRoutes(app) {
   });
 
   // Replay the log from a cursor. Members always apply in `seq` order.
-  app.get("/api/mls/groups/:groupId/messages", { preHandler: requireSession }, async (req, reply) => {
+  app.get("/api/mls/groups/:groupId/messages", {
+    preHandler: requireSession,
+    schema: {
+      params: groupParams,
+      querystring: obj({ since: { type: "integer", minimum: 0, default: 0 }, limit: { type: "integer", minimum: 1, maximum: 500, default: 200 } }),
+    },
+  }, async (req, reply) => {
     const g = await groupMembership(req.user.id, req.params.groupId);
     if (!g) return reply.code(404).send({ error: "no such group" });
-    const since = Number(req.query?.since ?? 0);
-    const limit = Math.min(Number(req.query?.limit ?? 200), 500);
+    const { since, limit } = req.query;
 
     const { rows } = await q(
       `SELECT seq, epoch, kind, sender_device_id, payload, created_at
@@ -294,7 +327,7 @@ export async function mlsRoutes(app) {
         WHERE group_id=$1 AND seq > $2
           AND (expires_at IS NULL OR expires_at > now())
         ORDER BY seq LIMIT $3`,
-      [g.group_id, Number.isFinite(since) ? since : 0, limit]);
+      [g.group_id, since, limit]);
 
     // A cursor at or below the watermark means messages were compacted away
     // before this device applied them. They cannot be re-sent — MLS decrypts
@@ -319,12 +352,14 @@ export async function mlsRoutes(app) {
    * compaction: the server prunes strictly below the slowest active device,
    * because nothing it deletes can ever be reconstructed.
    */
-  app.post("/api/mls/groups/:groupId/cursor", { preHandler: requireSession }, async (req, reply) => {
-    const seq = Number(req.body?.seq);
-    if (!Number.isFinite(seq) || seq < 0) return reply.code(400).send({ error: "seq required" });
+  app.post("/api/mls/groups/:groupId/cursor", {
+    preHandler: requireSession,
+    schema: { params: groupParams, body: obj({ seq: { type: "integer", minimum: 0 }, deviceId: UUID }, ["seq", "deviceId"]) },
+  }, async (req, reply) => {
+    const { seq } = req.body;
     const g = await groupMembership(req.user.id, req.params.groupId);
     if (!g) return reply.code(404).send({ error: "no such group" });
-    const dev = await ownedDevice(req.user.id, req.body?.deviceId);
+    const dev = await ownedDevice(req.user.id, req.body.deviceId);
     if (!dev) return reply.code(400).send({ error: "unknown device" });
 
     await q(
@@ -341,7 +376,7 @@ export async function mlsRoutes(app) {
 
   // -------------------------------------------------------------- welcomes
 
-  app.get("/api/mls/devices/:id/welcomes", { preHandler: requireSession }, async (req, reply) => {
+  app.get("/api/mls/devices/:id/welcomes", { preHandler: requireSession, schema: { params: deviceParams } }, async (req, reply) => {
     const dev = await ownedDevice(req.user.id, req.params.id);
     if (!dev) return reply.code(404).send({ error: "no such device" });
     const { rows } = await q(
@@ -360,9 +395,11 @@ export async function mlsRoutes(app) {
     };
   });
 
-  app.post("/api/mls/devices/:id/welcomes/ack", { preHandler: requireSession }, async (req, reply) => {
-    const ids = (Array.isArray(req.body?.ids) ? req.body.ids : []).map(Number).filter(Number.isFinite);
-    if (!ids.length) return reply.code(400).send({ error: "no ids" });
+  app.post("/api/mls/devices/:id/welcomes/ack", {
+    preHandler: requireSession,
+    schema: { params: deviceParams, body: obj({ ids: { type: "array", minItems: 1, maxItems: 100, items: { type: ["integer", "string"], pattern: "^[0-9]{1,18}$" } } }, ["ids"]) },
+  }, async (req, reply) => {
+    const ids = req.body.ids.map(Number);
     const dev = await ownedDevice(req.user.id, req.params.id);
     if (!dev) return reply.code(404).send({ error: "no such device" });
     const { rowCount } = await q(

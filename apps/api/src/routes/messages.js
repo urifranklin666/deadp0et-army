@@ -1,5 +1,6 @@
 import { q, tx } from "../db.js";
 import { requireSession } from "./auth.js";
+import { UUID, obj } from "../schemas.js";
 
 const b64 = (buf) => Buffer.from(buf).toString("base64");
 const unb64 = (s) => Buffer.from(String(s), "base64");
@@ -11,8 +12,11 @@ const MAX_BODY = 256 * 1024;
  * device is the client's job, because only the client can encrypt per-session.
  */
 export async function messageRoutes(app) {
-  app.post("/api/channels", { preHandler: requireSession }, async (req, reply) => {
-    const slug = String(req.body?.slug || "").toLowerCase().trim();
+  app.post("/api/channels", {
+    preHandler: requireSession,
+    schema: { body: obj({ slug: { type: "string", maxLength: 64 }, kind: { type: "string", maxLength: 16 } }, ["slug"]) },
+  }, async (req, reply) => {
+    const slug = String(req.body.slug).toLowerCase().trim();
     const kind = req.body?.kind === "canvas" ? "canvas" : "chat";
     if (!/^[a-z0-9-]{2,48}$/.test(slug)) {
       return reply.code(400).send({ error: "slug must be 2-48 chars: a-z 0-9 -" });
@@ -47,8 +51,16 @@ export async function messageRoutes(app) {
     return { channels: rows.map((r) => ({ ...r, epoch: r.epoch === null ? null : Number(r.epoch) })) };
   });
 
+  // ---------------------------------------------------- Signal envelope relay
+  //
+  // The PQXDH / Double Ratchet substrate has no client yet (the console speaks
+  // MLS only). Authenticated write endpoints with no consumer are attack
+  // surface for nothing, so they are off unless explicitly enabled; the
+  // e2ee test suite sets the flag.
+  if (process.env.ENABLE_SIGNAL_ROUTES !== "1") return;
+
   // Deliver one ciphertext per recipient device.
-  app.post("/api/channels/:id/envelopes", { preHandler: requireSession }, async (req, reply) => {
+  app.post("/api/channels/:id/envelopes", { preHandler: requireSession, schema: { params: obj({ id: UUID }, ["id"]) } }, async (req, reply) => {
     const items = Array.isArray(req.body?.envelopes) ? req.body.envelopes : [];
     if (!items.length) return reply.code(400).send({ error: "no envelopes" });
     if (items.length > 500) return reply.code(400).send({ error: "max 500 envelopes per call" });
@@ -83,7 +95,7 @@ export async function messageRoutes(app) {
   });
 
   // Long-poll-free pull: client asks for anything undelivered to its device.
-  app.get("/api/devices/:id/envelopes", { preHandler: requireSession }, async (req, reply) => {
+  app.get("/api/devices/:id/envelopes", { preHandler: requireSession, schema: { params: obj({ id: UUID }, ["id"]) } }, async (req, reply) => {
     const owned = await q("SELECT 1 FROM devices WHERE id=$1 AND user_id=$2",
       [req.params.id, req.user.id]);
     if (!owned.rowCount) return reply.code(404).send({ error: "no such device" });
@@ -104,7 +116,7 @@ export async function messageRoutes(app) {
   });
 
   // Explicit ack, so a crash mid-decrypt doesn't silently lose messages.
-  app.post("/api/devices/:id/ack", { preHandler: requireSession }, async (req, reply) => {
+  app.post("/api/devices/:id/ack", { preHandler: requireSession, schema: { params: obj({ id: UUID }, ["id"]) } }, async (req, reply) => {
     const ids = (Array.isArray(req.body?.ids) ? req.body.ids : []).map(Number).filter(Number.isFinite);
     if (!ids.length) return reply.code(400).send({ error: "no ids" });
     const owned = await q("SELECT 1 FROM devices WHERE id=$1 AND user_id=$2",

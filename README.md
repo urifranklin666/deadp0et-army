@@ -11,8 +11,9 @@ Live at [deadp0et.army](https://deadp0et.army) — console at `/app`.
 ## Layout
 
 ```
-apps/api        Fastify + Postgres + Redis. Key directory, ciphertext relay,
-                MLS delivery service, ephemeral presence relay.
+apps/api        Fastify + Postgres. MLS delivery service, key-package
+                directory, ephemeral presence relay. (A Signal PQXDH relay
+                is kept behind ENABLE_SIGNAL_ROUTES=1 for a future client.)
 apps/web        The console: passkey auth, encrypted chat, collaborative canvas.
 apps/site       Marketing site (deadp0et.army).
 packages/crypto Isomorphic MLS client — same code in Node and the browser.
@@ -78,6 +79,23 @@ under a PBKDF2-SHA256 key (310,000 iterations). The passphrase and plaintext
 bundle never leave the browser. Restore is emergency device replacement, not
 multi-device sync: keeping both copies active would clone an MLS ratchet.
 
+**Every MLS state change on a device is serialised, and the sender ratchet
+is persisted before the ciphertext leaves.** A canvas flush and a poll used
+to race on the same in-memory state; the loser's write clobbered the winner's
+and the device was stranded in a dead epoch. Persisting after the POST meant
+a crash in between restored the previous generation and reused an AES-GCM
+key and nonce on the next message. Group state, cursor, transcript and board
+are written in one IndexedDB transaction. Add and remove commits are
+two-phase: local state adopts the new epoch only after the delivery service
+accepts the commit.
+
+**KeyPackages are single-use, so a device keeps a pool.** Each invitation
+consumes one (RFC 9420 §10). A device publishes five, tops the pool up after
+every join, and founds groups with a fresh package it never publishes, so no
+two groups share a device's leaf keys. Claims require the group they are for,
+and a Welcome is accepted only on a commit, for a package the poster claimed
+for exactly that device — otherwise any member could re-grant a removed user.
+
 **Member removal is an MLS operation, not a database toggle.** An owner creates
 a remove commit for every leaf authenticated as the target handle. The delivery
 service stores that commit, advances the guarded epoch, and revokes channel
@@ -93,11 +111,10 @@ pnpm --filter api start          # :8790
 pnpm --filter web dev            # :5173, proxies /api
 ```
 
-Requires Postgres and Redis, and a `.env` at the repo root (never committed):
+Requires Postgres and a `.env` at the repo root (never committed):
 
 ```
 DATABASE_URL=postgres://…
-REDIS_URL=redis://127.0.0.1:6379/0
 RP_ID=deadp0et.army
 RP_ORIGIN=https://deadp0et.army
 SESSION_SECRET=…
@@ -113,15 +130,20 @@ Backend suites drive the real HTTP API; browser suites drive a real Chromium
 against the live origin with a CDP virtual WebAuthn authenticator.
 
 ```bash
-node apps/api/test/e2ee.test.js         # PQXDH handshake + relay
-node apps/api/test/mls.api.test.js      # delivery service + fork guard
+node apps/api/test/mls.api.test.js      # delivery service, fork guard, authz, schemas, sweeper
 node packages/crypto/test/remove.test.js # removal excludes the old epoch
 node apps/api/test/compaction.test.js   # prune safety
 node apps/web/test/e2e.mjs              # passkey → channel → message → reload
 node apps/web/test/canvas.mjs           # CRDT convergence, late-joiner snapshot
 node apps/web/test/presence.mjs         # live cursors, log stays untouched
+node apps/web/test/resilience.mjs       # concurrent senders, second invite, removal, rejoin
+node apps/web/test/milestone.mjs        # recovery export, roster removal
 node apps/site/test/funnel.mjs          # marketing → console handoff
 ```
+
+The Signal relay has no client yet, so its routes are off in production.
+To exercise them: `PORT=8799 ENABLE_SIGNAL_ROUTES=1 node apps/api/src/server.js`
+then `BASE=http://127.0.0.1:8799 node apps/api/test/e2ee.test.js`.
 
 ## Deploy
 
