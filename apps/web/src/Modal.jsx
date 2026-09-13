@@ -6,16 +6,48 @@ import { AlertTriangle, Loader2, X } from "lucide-react";
  * styled, and in some browsers are suppressed entirely.
  */
 
+const FOCUSABLE = 'input:not([type="hidden"]):not([disabled]), textarea:not([disabled]), select:not([disabled]), button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])';
+
+/**
+ * Keyboard behaviour every dialog needs: focus lands on the first field (not
+ * the Close button, or Enter on open would dismiss it), Tab cycles inside,
+ * Escape closes, and focus returns to where it was when the dialog goes.
+ * `onClose` is read through a ref so a parent re-rendering with a new
+ * closure does not re-run the focus logic.
+ */
+export function useDialog(ref, onClose) {
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return undefined;
+    const previous = document.activeElement;
+    const focusable = () => [...el.querySelectorAll(FOCUSABLE)];
+    const items = focusable();
+    const first = items.find((n) => n.matches("input, textarea, select"))
+      || items.find((n) => n.getAttribute("aria-label") !== "Close")
+      || items[0];
+    first?.focus();
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.stopPropagation(); closeRef.current(); return; }
+      if (e.key !== "Tab") return;
+      const list = focusable();
+      if (!list.length) return;
+      const i = list.indexOf(document.activeElement);
+      if (e.shiftKey && i <= 0) { e.preventDefault(); list[list.length - 1].focus(); }
+      else if (!e.shiftKey && (i === -1 || i === list.length - 1)) { e.preventDefault(); list[0].focus(); }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      if (previous instanceof HTMLElement && document.contains(previous)) previous.focus();
+    };
+  }, [ref]);
+}
+
 function Shell({ title, children, onClose }) {
   const ref = useRef(null);
-
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") onClose(); };
-    document.addEventListener("keydown", onKey);
-    // Focus the first field so the dialog is usable from the keyboard alone.
-    ref.current?.querySelector("input, button")?.focus();
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  useDialog(ref, onClose);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">

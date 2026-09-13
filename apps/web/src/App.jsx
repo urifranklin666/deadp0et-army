@@ -4,7 +4,7 @@ import {
   MessageSquare, PenLine, RefreshCw, Send, Settings, Shield, Skull, Upload, UserMinus, UserPlus, Users, Wifi, X,
 } from "lucide-react";
 import Canvas from "./Canvas.jsx";
-import { ConfirmModal, PromptModal } from "./Modal.jsx";
+import { ConfirmModal, PromptModal, useDialog } from "./Modal.jsx";
 import { api } from "./lib/api.js";
 import { GroupSession, SUITE, ensureDevice, login, register } from "./lib/session.js";
 import { downloadRecovery, exportRecovery, importRecovery } from "./lib/recovery.js";
@@ -62,6 +62,8 @@ function Banner({ kind = "error", children, onClose }) {
 }
 
 function RecoveryModal({ handle, onClose }) {
+  const ref = useRef(null);
+  useDialog(ref, onClose);
   const [passphrase, setPassphrase] = useState("");
   const [file, setFile] = useState(null);
   const [busy, setBusy] = useState(null);
@@ -78,11 +80,11 @@ function RecoveryModal({ handle, onClose }) {
     try { await importRecovery(file, passphrase, handle); location.reload(); }
     catch (e) { setError(e.message); setBusy(null); }
   };
-  return <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4" role="dialog" aria-modal="true" aria-label="Device recovery">
+  return <div ref={ref} onClick={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }} className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4" role="dialog" aria-modal="true" aria-label="Device recovery">
     <Glass className="w-full max-w-lg p-6">
       <div className="flex items-center justify-between"><div><h2 className="text-sm font-bold text-white">Device recovery</h2><p className="mt-1 text-[11px] text-slate-500">Encrypted locally. The server never receives this file or passphrase.</p></div><button onClick={onClose} aria-label="Close"><X className="h-4 w-4"/></button></div>
-      <label className="mt-5 block text-[10px] uppercase tracking-widest text-slate-500">Recovery passphrase</label>
-      <input type="password" value={passphrase} onChange={e=>setPassphrase(e.target.value)} placeholder="12+ characters, stored nowhere" className="mt-2 w-full rounded-lg border border-white/10 bg-black/50 px-3 py-2.5 font-mono text-sm text-white outline-none focus:border-rose-500/60"/>
+      <label htmlFor="dp-recovery-passphrase" className="mt-5 block text-[10px] uppercase tracking-widest text-slate-500">Recovery passphrase</label>
+      <input id="dp-recovery-passphrase" type="password" value={passphrase} onChange={e=>setPassphrase(e.target.value)} placeholder="12+ characters, stored nowhere" className="mt-2 w-full rounded-lg border border-white/10 bg-black/50 px-3 py-2.5 font-mono text-sm text-white outline-none focus:border-rose-500/60"/>
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
         <button onClick={exportNow} disabled={passphrase.length<12||busy} className="rounded-lg border border-white/15 p-4 text-left disabled:opacity-40"><Download className="h-5 w-5 text-cyan-300"/><b className="mt-3 block text-sm">Export encrypted backup</b><span className="mt-1 block text-[10px] text-slate-500">Emergency replacement only. Retire the old copy before restoring.</span></button>
         <label className="cursor-pointer rounded-lg border border-white/15 p-4"><Upload className="h-5 w-5 text-rose-300"/><b className="mt-3 block text-sm">Restore backup</b><span className="mt-1 block truncate text-[10px] text-slate-500">{file?.name||"Choose a .dpr file"}</span><input type="file" accept=".dpr,application/json" className="hidden" onChange={e=>setFile(e.target.files?.[0]||null)}/></label>
@@ -94,10 +96,12 @@ function RecoveryModal({ handle, onClose }) {
 }
 
 function MembersModal({ session, self, onClose, onRemoved }) {
+  const ref = useRef(null);
+  useDialog(ref, onClose);
   const [data,setData]=useState(null),[busy,setBusy]=useState(null),[error,setError]=useState(null);
   useEffect(()=>{session.members().then(setData).catch(e=>setError(e.message));},[session]);
   const remove=async(handle)=>{setBusy(handle);setError(null);try{const n=await session.removeMember(handle);setData(await session.members());onRemoved(`${handle} removed (${n} MLS leaf${n===1?"":"s"}); epoch advanced.`);}catch(e){setError(e.message);}finally{setBusy(null);}};
-  return <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4" role="dialog" aria-modal="true" aria-label="Room members"><Glass className="w-full max-w-lg p-6">
+  return <div ref={ref} onClick={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }} className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4" role="dialog" aria-modal="true" aria-label="Room members"><Glass className="w-full max-w-lg p-6">
     <div className="flex items-center justify-between"><div><h2 className="text-sm font-bold text-white">Room members</h2><p className="mt-1 text-[11px] text-slate-500">Database access and authenticated MLS leaves.</p></div><button onClick={onClose} aria-label="Close"><X className="h-4 w-4"/></button></div>
     <div className="mt-5 divide-y divide-white/10 border-y border-white/10">{!data?<p className="py-5 text-xs text-slate-500">Loading roster…</p>:data.members.map(m=><div key={m.handle} className="flex items-center gap-3 py-3"><span className="flex h-8 w-8 items-center justify-center rounded-full bg-white/5 font-mono text-xs text-rose-300">{m.handle.slice(0,2).toUpperCase()}</span><div><b className="block text-sm text-white">@{m.handle}{m.handle===self?" (you)":""}</b><span className="text-[10px] text-slate-500">{m.role} · {m.devices} registered device{m.devices===1?"":"s"}</span></div>{data.canRemove&&m.role!=="owner"?<button onClick={()=>remove(m.handle)} disabled={busy} className="ml-auto rounded p-2 text-slate-500 hover:bg-rose-500/10 hover:text-rose-300" aria-label={`Remove ${m.handle}`}>{busy===m.handle?<Loader2 className="h-4 w-4 animate-spin"/>:<UserMinus className="h-4 w-4"/>}</button>:null}</div>)}</div>
     {error?<div className="mt-4"><Banner>{error}</Banner></div>:null}<p className="mt-4 text-[10px] leading-relaxed text-slate-600">Removal publishes an MLS remove commit before server access is revoked. The removed member cannot derive the new epoch.</p>
@@ -208,6 +212,7 @@ function App() {
   const [busy, setBusy] = useState(null);
   const sessions = useRef(new Map());
   const [modal, setModal] = useState(null);
+  const [drawer, setDrawer] = useState(false);   // channel list on small screens
 
   const bump = useCallback(() => setTick((t) => t + 1), []);
 
@@ -268,6 +273,7 @@ function App() {
 
   async function openChannel(ch) {
     setErr(null);
+    setDrawer(false);
     let s = sessions.current.get(ch.id);
     if (!s) {
       s = new GroupSession(handle, deviceId, ch);
@@ -304,6 +310,7 @@ function App() {
   async function createChannel(slug) {
     setBusy("create");
     setErr(null);
+    setDrawer(false);
     try {
       const ch = await api.createChannel(slug.trim().toLowerCase(), "chat");
       const s = new GroupSession(handle, deviceId, ch);
@@ -383,36 +390,8 @@ function App() {
 
   if (phase === "auth") return <AuthScreen onAuthed={onAuthed} bootError={err} />;
 
-  return (
-    <div className="flex h-full min-h-full flex-col bg-[#05060a] text-slate-200">
-      <header className="flex shrink-0 items-center gap-3 border-b border-white/10 px-4 py-2.5">
-        <Skull className="h-5 w-5 text-rose-500" strokeWidth={1.75} />
-        <span className="text-xs font-black tracking-[0.2em] text-white">
-          DEADP0ET<span className="text-rose-500">.ARMY</span>
-        </span>
-        <span className="ml-2 hidden rounded border border-white/10 px-2 py-0.5 font-mono text-[10px] text-slate-500 sm:inline">
-          {SUITE}
-        </span>
-        <div className="ml-auto flex items-center gap-3">
-          <span className="hidden font-mono text-[10px] text-slate-600 sm:inline">build {BUILD}</span>
-          <span className="font-mono text-[11px] text-slate-500">@{handle}</span>
-          <button onClick={() => setModal({ kind: "recovery" })}
-            className="rounded-lg border border-white/10 p-1.5 text-slate-400 hover:text-white" aria-label="Device recovery">
-            <Settings className="h-4 w-4" />
-          </button>
-          <button
-            onClick={async () => { await api.logout(); location.reload(); }}
-            className="rounded-lg border border-white/10 p-1.5 text-slate-400 hover:text-white"
-            aria-label="Sign out"
-          >
-            <LogOut className="h-4 w-4" />
-          </button>
-        </div>
-      </header>
-
-      <div className="flex min-h-0 flex-1">
-        {/* channels */}
-        <aside className="flex w-56 shrink-0 flex-col border-r border-white/10">
+  const channelList = (
+    <>
           <div className="flex items-center justify-between px-3 py-2.5">
             <span className="text-[10px] uppercase tracking-widest text-slate-500">Channels</span>
             <button onClick={() => setModal({ kind: "channel" })} disabled={busy === "create"}
@@ -435,7 +414,54 @@ function App() {
               </button>
             ))}
           </div>
+    </>
+  );
+
+  return (
+    <div className="flex h-full min-h-full flex-col bg-[#05060a] text-slate-200">
+      <header className="flex shrink-0 items-center gap-3 border-b border-white/10 px-4 py-2.5">
+        <button onClick={() => setDrawer((v) => !v)} aria-label="Channels" aria-expanded={drawer}
+          className="rounded-lg border border-white/10 p-1.5 text-slate-400 hover:text-white md:hidden">
+          <Hash className="h-4 w-4" />
+        </button>
+        <Skull className="h-5 w-5 text-rose-500" strokeWidth={1.75} />
+        <span className="text-xs font-black tracking-[0.2em] text-white">
+          DEADP0ET<span className="text-rose-500">.ARMY</span>
+        </span>
+        <span className="ml-2 hidden rounded border border-white/10 px-2 py-0.5 font-mono text-[10px] text-slate-500 sm:inline">
+          {SUITE}
+        </span>
+        <div className="ml-auto flex items-center gap-3">
+          <span className="hidden font-mono text-[10px] text-slate-600 sm:inline">build {BUILD}</span>
+          <span className="font-mono text-[11px] text-slate-500">@{handle}</span>
+          <button onClick={() => setModal({ kind: "recovery" })}
+            className="rounded-lg border border-white/10 p-1.5 text-slate-400 hover:text-white" aria-label="Device recovery">
+            <Settings className="h-4 w-4" />
+          </button>
+          <button
+            onClick={() => api.logout().catch(() => {}).then(() => location.reload())}
+            className="rounded-lg border border-white/10 p-1.5 text-slate-400 hover:text-white"
+            aria-label="Sign out"
+          >
+            <LogOut className="h-4 w-4" />
+          </button>
+        </div>
+      </header>
+
+      <div className="flex min-h-0 flex-1">
+        {/* channels: a fixed sidebar from md up, a drawer below that */}
+        <aside className="hidden w-56 shrink-0 flex-col border-r border-white/10 md:flex">
+          {channelList}
         </aside>
+        {drawer ? (
+          <div className="fixed inset-0 z-40 md:hidden" onClick={() => setDrawer(false)}>
+            <div className="absolute inset-0 bg-black/60" />
+            <aside onClick={(e) => e.stopPropagation()} aria-label="Channels"
+              className="absolute inset-y-0 left-0 flex w-64 flex-col border-r border-white/10 bg-[#05060a] shadow-2xl">
+              {channelList}
+            </aside>
+          </div>
+        ) : null}
 
         {/* conversation */}
         <main className="flex min-w-0 flex-1 flex-col">
@@ -541,16 +567,16 @@ function Conversation({ session, self, onError, onChange, openModal }) {
 
   return (
     <>
-      <div className="flex shrink-0 items-center gap-3 border-b border-white/10 px-4 py-2.5">
-        <Hash className="h-4 w-4 text-slate-600" />
-        <span className="text-sm font-semibold text-white">{session.channel.slug}</span>
-        <span className="rounded border border-white/10 px-1.5 py-0.5 font-mono text-[10px] text-slate-500">
+      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-white/10 px-3 py-2 sm:px-4 sm:py-2.5">
+        <Hash className="h-4 w-4 shrink-0 text-slate-600" />
+        <span className="max-w-[45vw] truncate text-sm font-semibold text-white sm:max-w-none">{session.channel.slug}</span>
+        <span className="whitespace-nowrap rounded border border-white/10 px-1.5 py-0.5 font-mono text-[10px] text-slate-500">
           epoch {session.epoch ?? "—"}
         </span>
 
-        <div className="ml-4 flex rounded-lg border border-white/10 bg-white/5 p-0.5">
+        <div className="flex rounded-lg border border-white/10 bg-white/5 p-0.5 sm:ml-4">
           {[["chat", "Chat", MessageSquare], ["canvas", "Canvas", PenLine]].map(([id, label, Icon]) => (
-            <button key={id} onClick={() => setMode(id)}
+            <button key={id} onClick={() => setMode(id)} aria-pressed={mode === id}
               className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors
                 ${mode === id ? "bg-rose-600 text-white" : "text-slate-400 hover:text-white"}`}>
               <Icon className="h-3 w-3" />{label}
@@ -559,16 +585,16 @@ function Conversation({ session, self, onError, onChange, openModal }) {
         </div>
 
         <div className="ml-auto flex items-center gap-2">
-          <span className={`hidden items-center gap-1.5 font-mono text-[10px] sm:inline-flex ${syncColor}`} title={session.lastSyncError || (session.lastSyncedAt ? `Last synced ${session.lastSyncedAt.toLocaleTimeString()}` : "Waiting for first sync")}>
-            {session.syncStatus === "syncing" ? <Loader2 className="h-3 w-3 animate-spin"/> : <Wifi className="h-3 w-3"/>}{syncLabel}
+          <span className={`inline-flex items-center gap-1.5 font-mono text-[10px] ${syncColor}`} aria-label={`Sync: ${syncLabel}`} title={session.lastSyncError || (session.lastSyncedAt ? `Last synced ${session.lastSyncedAt.toLocaleTimeString()}` : "Waiting for first sync")}>
+            {session.syncStatus === "syncing" ? <Loader2 className="h-3 w-3 animate-spin"/> : <Wifi className="h-3 w-3"/>}<span className="hidden sm:inline">{syncLabel}</span>
           </span>
           <button onClick={async () => { try { await session.sync(); onChange(); } catch (e) { onError(e.message); } }}
             className="rounded p-1.5 text-slate-500 hover:bg-white/5 hover:text-white" aria-label="Sync">
             <RefreshCw className="h-3.5 w-3.5" />
           </button>
-          <Button icon={UserPlus} variant="ghost" disabled={!usable}
-            onClick={invite} className="!px-3 !py-1.5 !text-xs">
-            Invite
+          <Button icon={UserPlus} variant="ghost" disabled={!usable} aria-label="Invite"
+            onClick={invite} className="!px-2.5 !py-1.5 !text-xs sm:!px-3">
+            <span className="hidden sm:inline">Invite</span>
           </Button>
           <button onClick={roster} disabled={!usable} className="rounded p-1.5 text-slate-500 hover:bg-white/5 hover:text-white disabled:opacity-40" aria-label="Room members"><Users className="h-4 w-4"/></button>
         </div>
@@ -620,6 +646,7 @@ function Conversation({ session, self, onError, onChange, openModal }) {
         <div className="flex items-end gap-2">
           <textarea
             rows={1}
+            aria-label="Message"
             value={draft}
             disabled={!usable}
             onChange={(e) => setDraft(e.target.value)}
