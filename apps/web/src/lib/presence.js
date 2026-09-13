@@ -9,7 +9,8 @@
 
 const SEND_HZ = 20;
 const STALE_MS = 5000;          // no frame for this long => cursor disappears
-const RECONNECT_MS = 2000;
+const RECONNECT_MIN_MS = 1000;
+const RECONNECT_MAX_MS = 30000;   // exponential backoff with jitter up to this
 
 export class Presence {
   constructor(session) {
@@ -25,6 +26,7 @@ export class Presence {
 
   connect() {
     if (this.closed || !this.session.client || !this.session.groupId) return;
+    if (this.session.revoked || this.session.desynced) { this.#retry(); return; }
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     const url = `${proto}//${location.host}/api/mls/groups/${encodeURIComponent(this.session.groupId)}/live`;
 
@@ -40,6 +42,7 @@ export class Presence {
       this.peers.set(packet.id, { x: packet.x, y: packet.y, handle: packet.h, at: Date.now() });
       this.onChange?.();
     };
+    ws.onopen = () => { this.attempt = 0; };
     ws.onclose = () => { this.ws = null; this.#retry(); };
     ws.onerror = () => { try { ws.close(); } catch { /* already closing */ } };
 
@@ -56,7 +59,12 @@ export class Presence {
   #retry() {
     if (this.closed) return;
     clearTimeout(this.retryTimer);
-    this.retryTimer = setTimeout(() => this.connect(), RECONNECT_MS);
+    // A removed member's socket is closed by the server; hammering it every
+    // two seconds forever was the old behaviour. Back off, with jitter so a
+    // reconnecting room does not thunder.
+    const n = (this.attempt = (this.attempt || 0) + 1);
+    const base = Math.min(RECONNECT_MAX_MS, RECONNECT_MIN_MS * 2 ** (n - 1));
+    this.retryTimer = setTimeout(() => this.connect(), base * (0.5 + Math.random()));
   }
 
   /** Throttled cursor publish; coordinates are normalised 0..1. */

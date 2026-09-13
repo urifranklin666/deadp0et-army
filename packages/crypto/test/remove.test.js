@@ -7,10 +7,12 @@ await A.newKeyPackage();
 const bkp = await B.newKeyPackage();
 await A.createGroup(crypto.getRandomValues(new Uint8Array(16)));
 const add = await A.addMembers([bkp.encoded]);
+add.confirm();
 await B.joinFromWelcome(add.welcome);
 assert.deepEqual(A.members().map((m) => m.identity).sort(), ["remove_alice", "remove_bob"]);
 
 const removal = await A.removeMember("remove_bob");
+removal.confirm();
 assert.equal(removal.removedLeaves, 1);
 assert.deepEqual(A.members().map((m) => m.identity), ["remove_alice"]);
 // The delivery service revokes Bob in the same transaction that stores this

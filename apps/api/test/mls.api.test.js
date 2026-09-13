@@ -101,6 +101,7 @@ const posted = await must(alice, "POST", `/api/mls/groups/${GID}/messages`, {
   payload: b64(addBob.commit),
   welcomes: [{ ref: claimed.keyPackages[0].ref, deviceId: bDev, welcome: b64(addBob.welcome) }],
 });
+addBob.confirm();   // the delivery service accepted it; only now adopt the new epoch
 assert.equal(posted.epoch, 0, "the commit belongs to the epoch it transitions from");
 console.log("· alice committed add(bob) at epoch 0 -> seq", posted.seq);
 
@@ -191,6 +192,7 @@ const carolCommit = await must(bob, "POST", `/api/mls/groups/${GID}/messages`, {
   payload: b64(addCarol.commit),
   welcomes: [{ ref: cClaim.keyPackages[0].ref, deviceId: cDev, welcome: b64(addCarol.welcome) }],
 });
+addCarol.confirm();
 console.log("· bob committed add(carol) at epoch", addCarol.builtAtEpoch, "-> seq", carolCommit.seq);
 
 // Alice must follow bob's commit to stay in sync.
@@ -223,6 +225,7 @@ await must(alice, "POST", `/api/mls/groups/${GID}/messages`, {
   kind: "commit", epoch: removeCarol.builtAtEpoch, senderDeviceId: aDev,
   payload: b64(removeCarol.commit), removeHandle: "mls_carol",
 });
+removeCarol.confirm();
 const carolAfter = await api(carol, "GET", `/api/mls/groups/${GID}/messages`);
 assert.equal(carolAfter.status, 404, "removed member must lose delivery-service access atomically");
 const postRemoval = await A.encrypt("new epoch excludes carol");

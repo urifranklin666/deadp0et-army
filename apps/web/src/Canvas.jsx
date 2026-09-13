@@ -27,7 +27,7 @@ export default function Canvas({ session, onError, openModal }) {
   const presence = useRef(null);
   const [peers, setPeers] = useState([]);
 
-  const joined = !!session.client;
+  const joined = session.usable;   // member, not removed, not out of step
 
   /* ------------------------------------------------------------- painting */
 

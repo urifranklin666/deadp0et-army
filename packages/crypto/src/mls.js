@@ -140,8 +140,11 @@ export class MlsClient {
   /**
    * Commit an add for each supplied KeyPackage.
    * Returns the wire bytes for the commit plus one Welcome per new member.
-   * The caller is responsible for submitting these AT the epoch they were
-   * built against — the server rejects a commit for a superseded epoch.
+   *
+   * Local state is NOT advanced until the caller invokes `confirm()`. The
+   * delivery service is the arbiter of which commit wins an epoch; adopting
+   * the new epoch before it agrees would, on a 409, leave this client alone
+   * in an epoch nobody else will ever reach.
    */
   async addMembers(encodedKeyPackages) {
     const proposals = encodedKeyPackages.map((bytes) => {
@@ -153,15 +156,15 @@ export class MlsClient {
     const res = await createCommit(
       { state: this.#state, cipherSuite: this.#cs },
       { extraProposals: proposals, ratchetTreeExtension: true });
-    this.#state = res.newState;
     return {
       builtAtEpoch,
       commit: encodeMlsMessage(res.commit),
       welcome: res.welcome ? encodeMlsMessage({ version: MLS_VERSION, wireformat: "mls_welcome", welcome: res.welcome }) : null,
+      confirm: () => { this.#state = res.newState; },
     };
   }
 
-  /** Remove every device leaf authenticated as `identity`, advancing epoch. */
+  /** Remove every device leaf authenticated as `identity`. Two-phase like addMembers. */
   async removeMember(identity) {
     const leaves = this.members().filter((m) => m.identity === identity);
     if (!leaves.length) throw new Error(`no MLS member named ${identity}`);
@@ -170,8 +173,12 @@ export class MlsClient {
     const res = await createCommit(
       { state: this.#state, cipherSuite: this.#cs },
       { extraProposals: leaves.map((m) => ({ proposalType: "remove", remove: { removed: m.leafIndex } })) });
-    this.#state = res.newState;
-    return { builtAtEpoch, commit: encodeMlsMessage(res.commit), removedLeaves: leaves.length };
+    return {
+      builtAtEpoch,
+      commit: encodeMlsMessage(res.commit),
+      removedLeaves: leaves.length,
+      confirm: () => { this.#state = res.newState; },
+    };
   }
 
   /** Join from a Welcome produced by someone else's add commit. */
@@ -198,7 +205,9 @@ export class MlsClient {
    */
   async apply(encoded) {
     const msg = decode(encoded);
-    if (msg.wireformat !== "mls_private_message") return null;
+    // Every member sends private messages. Anything else in the log would be
+    // silently skipped and, if it were a commit, desync us without a trace.
+    if (msg.wireformat !== "mls_private_message") throw new Error(`unexpected wire format ${msg.wireformat}`);
     const res = await processPrivateMessage(this.#state, msg.privateMessage, emptyPskIndex, this.#cs);
     this.#state = res.newState;
     return res.kind === "applicationMessage" ? fromUtf8(res.message) : null;
@@ -239,7 +248,10 @@ export class MlsClient {
     const key = await this.presenceKey();
     const nonce = crypto.getRandomValues(new Uint8Array(12));
     const pt = new TextEncoder().encode(JSON.stringify(obj));
-    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, key, pt));
+    // The group id as associated data binds a frame to this room, so a frame
+    // captured from one room cannot be replayed into another sharing a key.
+    const ct = new Uint8Array(await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv: nonce, additionalData: this.#state.groupContext.groupId }, key, pt));
     const out = new Uint8Array(nonce.length + ct.length);
     out.set(nonce, 0);
     out.set(ct, nonce.length);
@@ -252,7 +264,8 @@ export class MlsClient {
       const key = await this.presenceKey();
       const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
       const pt = await crypto.subtle.decrypt(
-        { name: "AES-GCM", iv: buf.subarray(0, 12) }, key, buf.subarray(12));
+        { name: "AES-GCM", iv: buf.subarray(0, 12), additionalData: this.#state.groupContext.groupId },
+        key, buf.subarray(12));
       return JSON.parse(new TextDecoder().decode(pt));
     } catch {
       // A peer one epoch ahead/behind simply won't decrypt. Not an error.

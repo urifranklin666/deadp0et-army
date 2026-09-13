@@ -46,6 +46,10 @@ async function withStore(mode, fn) {
 export const store = {
   get: (key) => withStore("readonly", (s) => s.get(key)),
   set: (key, value) => withStore("readwrite", (s) => s.put(value, key)),
+  // One transaction for several keys. Group state, cursor and transcript must
+  // land together or a crash between writes leaves a ratchet that disagrees
+  // with its own cursor.
+  setMany: (entries) => withStore("readwrite", (s) => { for (const [key, value] of entries) s.put(value, key); }),
   del: (key) => withStore("readwrite", (s) => s.delete(key)),
   clear: () => withStore("readwrite", (s) => s.clear()),
   entries: () => withStore("readonly", (s) => new Promise((resolve, reject) => {

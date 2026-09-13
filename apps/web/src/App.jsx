@@ -11,7 +11,7 @@ import { GroupSession, SUITE, ensureDevice, login, register } from "./lib/sessio
 import { downloadRecovery, exportRecovery, importRecovery } from "./lib/recovery.js";
 
 const SYNC_MS = 2500;
-const BUILD = "2026-09-13.1";
+const BUILD = "2026-09-13.2";
 
 /* ------------------------------------------------------------ primitives */
 
@@ -50,7 +50,7 @@ function Banner({ kind = "error", children, onClose }) {
     ok: "border-emerald-500/30 bg-emerald-950/30 text-emerald-200",
   };
   return (
-    <div className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-xs ${skins[kind]}`}>
+    <div role={kind === "error" ? "alert" : "status"} className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-xs ${skins[kind]}`}>
       <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
       <span className="min-w-0 flex-1 break-words">{children}</span>
       {onClose ? (
@@ -212,6 +212,17 @@ function App() {
 
   const bump = useCallback(() => setTick((t) => t + 1), []);
 
+  // The server lists only current memberships. A room this tab was removed
+  // from keeps its local transcript and, if re-invited, rejoins in place, so
+  // keep it in the sidebar rather than letting a refresh make it vanish.
+  const mergeChannels = (list) => {
+    const known = new Set(list.map((c) => c.id));
+    const kept = [...sessions.current.values()]
+      .filter((s) => !known.has(s.channel.id))
+      .map((s) => ({ ...s.channel, groupId: s.groupId, stale: true }));
+    return [...list, ...kept];
+  };
+
   /* ----------------------------------------------------------- bootstrap */
 
   useEffect(() => {
@@ -221,8 +232,13 @@ function App() {
         const { user } = await api.me();
         if (dead) return;
         await boot(user.handle);
-      } catch {
-        if (!dead) setPhase("auth");
+      } catch (e) {
+        if (dead) return;
+        // 401 is the ordinary "not signed in". Anything else (offline, the
+        // API down, IndexedDB refusing) deserves to be seen, not a silent
+        // bounce to the sign-in form.
+        if (e?.status !== 401) setErr(`Could not start the console: ${e.message}`);
+        setPhase("auth");
       }
     })();
     return () => { dead = true; };
@@ -256,7 +272,6 @@ function App() {
     let s = sessions.current.get(ch.id);
     if (!s) {
       s = new GroupSession(handle, deviceId, ch);
-      sessions.current.set(ch.id, s);
       try {
         if (!ch.groupId) {
           // Channel exists with no MLS group yet — we found it.
@@ -267,15 +282,21 @@ function App() {
           const restored = await s.open(ch.groupId);
           if (!restored) {
             s.groupId = ch.groupId;
-            const joined = await s.tryJoin();
-            if (!joined) {
+            if (!(await s.tryJoin())) {
               setErr("This device has no key material for that channel yet. Ask a member to invite it.");
             }
           }
         }
+        sessions.current.set(ch.id, s);
       } catch (e) {
+        // Do not cache a session whose open failed, or every later click
+        // would return the same broken object without retrying.
         setErr(e.message);
+        return;
       }
+    } else if (!s.client) {
+      // Opened before any Welcome existed; one may have arrived since.
+      try { await s.tryJoin(); } catch (e) { setErr(e.message); }
     }
     setActive(s);
     bump();
@@ -313,12 +334,22 @@ function App() {
         if (dead || !welcomes.length) return;
         const { channels: list } = await api.channels();
         if (dead) return;
-        setChannels(list);
+        setChannels(mergeChannels(list));
+        // If the open channel is the one we were just invited to (first time,
+        // or again after a removal) join it here rather than making the user
+        // click away and back.
+        const s = active;
+        if (s && !s.client && welcomes.some((w) => w.groupId === s.groupId)) {
+          await s.tryJoin();
+          bump();
+          return;
+        }
         setNotice(`Invited to ${welcomes.length} group${welcomes.length > 1 ? "s" : ""} — open it to join.`);
       } catch { /* transient */ }
     }, SYNC_MS * 2);
     return () => { dead = true; clearInterval(id); };
-  }, [phase, deviceId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, deviceId, active]);
 
   // Drain the active group's log.
   useEffect(() => {
@@ -326,8 +357,8 @@ function App() {
     let dead = false;
     const pull = async () => {
       try {
-        const { applied } = await active.sync();
-        if (!dead && applied) bump();
+        const { changed } = await active.sync();
+        if (!dead && changed) bump();
       } catch (e) {
         if (!dead) setErr(e.message);
       }
@@ -399,7 +430,7 @@ function App() {
             ) : channels.map((ch) => (
               <button key={ch.id} onClick={() => openChannel(ch)}
                 className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition-colors
-                  ${active?.channel?.id === ch.id ? "bg-rose-600/15 text-white" : "text-slate-400 hover:bg-white/5"}`}>
+                  ${active?.channel?.id === ch.id ? "bg-rose-600/15 text-white" : "text-slate-400 hover:bg-white/5"} ${ch.stale ? "opacity-50" : ""}`}>
                 <Hash className="h-3.5 w-3.5 shrink-0 opacity-60" />
                 <span className="truncate">{ch.slug}</span>
               </button>
@@ -491,10 +522,11 @@ function Conversation({ session, self, onError, onChange, openModal }) {
   useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [session.history.length]);
 
   const joined = !!session.client;
+  const usable = session.usable;
 
   const send = async () => {
     const text = draft.trim();
-    if (!text || !joined) return;
+    if (!text || !usable) return;
     setBusy("send");
     setDraft("");
     try { await session.send(text); onChange(); }
@@ -504,8 +536,9 @@ function Conversation({ session, self, onError, onChange, openModal }) {
 
   const invite = () => openModal({ kind: "invite", session });
   const roster = () => openModal({ kind: "members", session });
-  const syncLabel = session.syncStatus === "syncing" ? "syncing" : session.syncStatus === "error" ? "sync error" : session.syncStatus === "recovered" ? "recovered" : session.lastSyncedAt ? "synced" : "not synced";
-  const syncColor = session.syncStatus === "error" ? "text-rose-300" : session.syncStatus === "recovered" ? "text-amber-300" : "text-emerald-300";
+  const syncLabel = { syncing: "syncing", error: "sync error", recovered: "recovered", revoked: "removed from room", desynced: "out of step" }[session.syncStatus]
+    || (session.lastSyncedAt ? "synced" : "not synced");
+  const syncColor = ["error", "revoked", "desynced"].includes(session.syncStatus) ? "text-rose-300" : session.syncStatus === "recovered" ? "text-amber-300" : "text-emerald-300";
 
   return (
     <>
@@ -534,11 +567,11 @@ function Conversation({ session, self, onError, onChange, openModal }) {
             className="rounded p-1.5 text-slate-500 hover:bg-white/5 hover:text-white" aria-label="Sync">
             <RefreshCw className="h-3.5 w-3.5" />
           </button>
-          <Button icon={UserPlus} variant="ghost" disabled={!joined}
+          <Button icon={UserPlus} variant="ghost" disabled={!usable}
             onClick={invite} className="!px-3 !py-1.5 !text-xs">
             Invite
           </Button>
-          <button onClick={roster} disabled={!joined} className="rounded p-1.5 text-slate-500 hover:bg-white/5 hover:text-white disabled:opacity-40" aria-label="Room members"><Users className="h-4 w-4"/></button>
+          <button onClick={roster} disabled={!usable} className="rounded p-1.5 text-slate-500 hover:bg-white/5 hover:text-white disabled:opacity-40" aria-label="Room members"><Users className="h-4 w-4"/></button>
         </div>
       </div>
 
@@ -557,7 +590,7 @@ function Conversation({ session, self, onError, onChange, openModal }) {
         ) : (
           <ul className="space-y-2">
             {session.history.map((m) => (
-              <li key={m.seq} className="animate-[dp-rise_0.25s_ease-out_both]">
+              <li key={m.key ?? m.seq} className="animate-[dp-rise_0.25s_ease-out_both]">
                 {m.notice ? (
                   <div className="flex items-start gap-2 rounded-lg border border-cyan-500/25 bg-cyan-950/20 px-3 py-2 text-[11px] text-cyan-200">
                     <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
@@ -589,15 +622,15 @@ function Conversation({ session, self, onError, onChange, openModal }) {
           <textarea
             rows={1}
             value={draft}
-            disabled={!joined}
+            disabled={!usable}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-            placeholder={joined ? "Encrypted before it leaves this tab…" : "Not a member yet"}
+            placeholder={!joined ? "Not a member yet" : session.revoked ? "Removed from this room" : session.desynced ? "Waiting for a fresh invite" : "Encrypted before it leaves this tab…"}
             className="dp-scroll max-h-32 min-h-[38px] flex-1 resize-none rounded-lg border border-white/10 bg-black/50
               px-3 py-2 text-sm text-white outline-none transition-colors placeholder:text-slate-600
               focus:border-rose-500/60 disabled:opacity-50"
           />
-          <Button icon={Send} busy={busy === "send"} disabled={!joined || !draft.trim()} onClick={send}>
+          <Button icon={Send} busy={busy === "send"} disabled={!usable || !draft.trim()} onClick={send}>
             Send
           </Button>
         </div>
