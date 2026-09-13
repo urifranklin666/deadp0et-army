@@ -80,6 +80,19 @@ await alice.page.getByText(slug, { exact: true }).first().click();
 await alice.page.getByText(MSG).waitFor({ timeout: 60000 });
 console.log("· history survived a full reload (IndexedDB state restored)");
 
+// Sign out and sign back in with the same passkey. This is the path a user
+// takes when the 30-day cookie lapses; it was broken from launch until
+// 2026-09-13 (credential IDs were stored as base64url text, not bytes) and
+// nothing exercised it because every suite registered and reloaded.
+await alice.page.getByRole("button", { name: "Sign out" }).click();
+await alice.page.getByRole("button", { name: "Sign in" }).waitFor({ timeout: 60000 });
+await alice.page.getByPlaceholder("ghost_01").fill(alice.handle);
+await alice.page.getByRole("button", { name: "Sign in" }).click();
+await alice.page.getByRole("button", { name: "New channel" }).waitFor({ timeout: 90000 });
+await alice.page.getByText(slug, { exact: true }).first().click();
+await alice.page.getByText(MSG).waitFor({ timeout: 60000 });
+console.log("· signed out and back in with the passkey; history intact");
+
 // A second identity must not see the group at all until invited.
 const bob = await newUser(browser, "web_b_" + rnd());
 console.log("· bob registered:", bob.handle);

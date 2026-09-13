@@ -70,7 +70,7 @@ export async function authRoutes(app) {
       attestationType: "none",
       authenticatorSelection: {
         residentKey: "preferred",
-        userVerification: "preferred",
+        userVerification: "required",
       },
     });
     putChallenge(`reg:${userId}`, { challenge: options.challenge, handle });
@@ -96,7 +96,10 @@ export async function authRoutes(app) {
       await c.query(
         `INSERT INTO webauthn_credentials(user_id, credential_id, public_key, counter, transports)
          VALUES ($1,$2,$3,$4,$5)`,
-        [userId, Buffer.from(credential.id), Buffer.from(credential.publicKey),
+        // credential.id is a base64url STRING in @simplewebauthn/server v13;
+        // login/finish decodes the browser's response.id to raw bytes and looks
+        // those up, so the stored value must be the raw bytes too.
+        [userId, Buffer.from(credential.id, "base64url"), Buffer.from(credential.publicKey),
          credential.counter ?? 0, credential.transports ?? null]
       );
     });
@@ -112,7 +115,7 @@ export async function authRoutes(app) {
          JOIN users u ON u.id=c.user_id WHERE u.handle=$1`, [handle]);
     const options = await generateAuthenticationOptions({
       rpID: RP_ID,
-      userVerification: "preferred",
+      userVerification: "required",
       allowCredentials: rows.map((r) => ({
         id: Buffer.from(r.credential_id).toString("base64url"),
         transports: r.transports ?? undefined,
