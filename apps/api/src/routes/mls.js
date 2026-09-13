@@ -4,6 +4,11 @@ import { requireSession } from "./auth.js";
 const b64 = (buf) => Buffer.from(buf).toString("base64");
 const unb64 = (s) => Buffer.from(String(s), "base64");
 const MAX_PAYLOAD = 512 * 1024;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const MAX_WELCOMES = 100;
+// Claims burn a single-use KeyPackage on someone else's device; keep the
+// blast radius of an abusive account small even though it is authenticated.
+const CLAIM_LIMIT = { rateLimit: { max: 30, timeWindow: "1 minute" } };
 
 /** Confirm the caller owns this device; returns its id or null. */
 async function ownedDevice(userId, deviceId) {
@@ -85,9 +90,17 @@ export async function mlsRoutes(app) {
   // Claim one unclaimed KeyPackage per device belonging to `handle`.
   // SKIP LOCKED + the claimed_at write is what stops two concurrent adds
   // being handed the same package.
-  app.get("/api/mls/key-packages/:handle", { preHandler: requireSession }, async (req, reply) => {
+  //
+  // A claim is only meaningful as the first half of an add into a group the
+  // caller belongs to, so it requires that group: without it any account could
+  // drain any user's packages and make them un-invitable. The claimer is
+  // recorded so the Welcome on the add commit can be tied back to this claim.
+  app.get("/api/mls/key-packages/:handle", { preHandler: requireSession, config: CLAIM_LIMIT }, async (req, reply) => {
     const suite = req.query?.ciphersuite;
     if (!suite) return reply.code(400).send({ error: "ciphersuite query param required" });
+    if (!req.query?.groupId) return reply.code(400).send({ error: "groupId query param required" });
+    const g = await groupMembership(req.user.id, req.query.groupId);
+    if (!g) return reply.code(404).send({ error: "no such group" });
 
     const { rows: devs } = await q(
       `SELECT d.id FROM devices d JOIN users u ON u.id=d.user_id WHERE u.handle=$1`,
@@ -98,11 +111,11 @@ export async function mlsRoutes(app) {
     for (const d of devs) {
       const got = await tx(async (c) => {
         const { rows } = await c.query(
-          `UPDATE mls_key_packages SET claimed_at=now()
+          `UPDATE mls_key_packages SET claimed_at=now(), claimed_by=$3
             WHERE id = (SELECT id FROM mls_key_packages
                          WHERE device_id=$1 AND ciphersuite=$2 AND claimed_at IS NULL
                          ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1)
-          RETURNING ref, key_package`, [d.id, suite]);
+          RETURNING ref, key_package`, [d.id, suite, req.user.id]);
         return rows[0] ?? null;
       });
       if (got) {
@@ -181,6 +194,18 @@ export async function mlsRoutes(app) {
     const dev = await ownedDevice(req.user.id, senderDeviceId);
     if (!dev) return reply.code(400).send({ error: "unknown sender device" });
 
+    // Welcomes grant channel membership, so they are accepted only where MLS
+    // itself grants group membership: on a commit, for a KeyPackage this
+    // caller claimed for exactly that device.
+    const ws = Array.isArray(welcomes) ? welcomes : [];
+    if (ws.length && kind !== "commit") return reply.code(400).send({ error: "welcomes ride only on commits" });
+    if (ws.length > MAX_WELCOMES) return reply.code(400).send({ error: `max ${MAX_WELCOMES} welcomes per commit` });
+    for (const w of ws) {
+      if (!w || !UUID_RE.test(String(w.deviceId)) || !w.ref || !w.welcome) {
+        return reply.code(400).send({ error: "each welcome needs deviceId, ref and welcome" });
+      }
+    }
+
     const ttl = Number(retentionDays);
     const expires = Number.isFinite(ttl) && ttl > 0 ? new Date(Date.now() + ttl * 864e5) : null;
 
@@ -216,7 +241,13 @@ export async function mlsRoutes(app) {
         // a member could hold group keys yet be unable to fetch the very
         // messages they can decrypt. So the add commit also materialises
         // channel membership for the welcomed device's owner.
-        for (const w of Array.isArray(welcomes) ? welcomes : []) {
+        for (const w of ws) {
+          const claim = await c.query(
+            `SELECT 1 FROM mls_key_packages WHERE ref=$1 AND device_id=$2 AND claimed_by=$3`,
+            [unb64(w.ref), w.deviceId, req.user.id]);
+          if (!claim.rowCount) {
+            throw Object.assign(new Error("welcome ref was not claimed by you for that device"), { statusCode: 400 });
+          }
           await c.query(
             `INSERT INTO mls_welcomes(group_id, key_package_ref, target_device_id, payload, ratchet_tree, joined_at_seq)
              VALUES ($1,$2,$3,$4,$5,$6)`,

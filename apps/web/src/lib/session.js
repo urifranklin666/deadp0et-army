@@ -324,7 +324,7 @@ export class GroupSession {
 
   /** Add another user by handle: claim their KeyPackage, commit, send Welcome. */
   async invite(handle) {
-    const { keyPackages } = await api.claimKeyPackages(handle, SUITE);
+    const { keyPackages } = await api.claimKeyPackages(handle, SUITE, this.groupId);
     const add = await this.client.addMembers(keyPackages.map((k) => unb64(k.keyPackage)));
     await api.postMessage(this.groupId, {
       kind: "commit",

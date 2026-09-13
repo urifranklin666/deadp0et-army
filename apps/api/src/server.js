@@ -12,8 +12,12 @@ import { compactAll } from "./compaction.js";
 
 const app = Fastify({
   logger: { level: process.env.LOG_LEVEL || "info" },
-  // nginx is the only thing in front of us and it sets these.
-  trustProxy: true,
+  // Trust only the loopback hop (nginx). `true` would take the LEFTMOST
+  // X-Forwarded-For entry, which the client controls (Cloudflare appends to
+  // an existing header rather than replacing it), so req.ip — and with it the
+  // rate limiter's key — was spoofable. nginx now forwards a single
+  // realip-resolved address.
+  trustProxy: "127.0.0.1",
   bodyLimit: 1024 * 1024, // 1 MiB — envelopes are small; canvas state has its own cap
 });
 

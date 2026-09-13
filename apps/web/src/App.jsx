@@ -11,7 +11,7 @@ import { GroupSession, SUITE, ensureDevice, login, register } from "./lib/sessio
 import { downloadRecovery, exportRecovery, importRecovery } from "./lib/recovery.js";
 
 const SYNC_MS = 2500;
-const BUILD = "2026-08-06.1";
+const BUILD = "2026-09-13.1";
 
 /* ------------------------------------------------------------ primitives */
 

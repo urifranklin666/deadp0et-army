@@ -87,11 +87,11 @@ console.log("· group created at epoch 0");
 
 // ------------------------------------------------------------- adding bob
 
-const claimed = await must(alice, "GET", `/api/mls/key-packages/mls_bob?ciphersuite=${encodeURIComponent(SUITE)}`);
+const claimed = await must(alice, "GET", `/api/mls/key-packages/mls_bob?ciphersuite=${encodeURIComponent(SUITE)}&groupId=${GID}`);
 assert.equal(claimed.keyPackages.length, 1);
 
 // Claiming twice must fail — a KeyPackage is single-use.
-const again = await api(alice, "GET", `/api/mls/key-packages/mls_bob?ciphersuite=${encodeURIComponent(SUITE)}`);
+const again = await api(alice, "GET", `/api/mls/key-packages/mls_bob?ciphersuite=${encodeURIComponent(SUITE)}&groupId=${GID}`);
 assert.equal(again.status, 409, "a claimed key package must not be reissued");
 console.log("· key package claimed exactly once (second claim 409s)");
 
@@ -155,7 +155,30 @@ console.log("· bob replayed the log and decrypted:", JSON.stringify(received));
 
 // --------------------------------------------------- growing to 3 members
 
-const cClaim = await must(bob, "GET", `/api/mls/key-packages/mls_carol?ciphersuite=${encodeURIComponent(SUITE)}`);
+// A stranger to the group cannot claim into it, and a member cannot smuggle a
+// Welcome onto an application message or onto a commit for a package someone
+// else claimed: both are how a removed user could be re-granted log access.
+const strangerClaim = await api(carol, "GET", `/api/mls/key-packages/mls_bob?ciphersuite=${encodeURIComponent(SUITE)}&groupId=${GID}`);
+assert.equal(strangerClaim.status, 404, "non-members must not claim key packages into the group");
+const noGroup = await api(alice, "GET", `/api/mls/key-packages/mls_bob?ciphersuite=${encodeURIComponent(SUITE)}`);
+assert.equal(noGroup.status, 400, "a claim must name the group it is for");
+const cClaim = await must(bob, "GET", `/api/mls/key-packages/mls_carol?ciphersuite=${encodeURIComponent(SUITE)}&groupId=${GID}`);
+const smuggled = await api(alice, "POST", `/api/mls/groups/${GID}/messages`, {
+  kind: "application", senderDeviceId: aDev, payload: b64(ct),
+  welcomes: [{ ref: cClaim.keyPackages[0].ref, deviceId: cDev, welcome: b64(ct) }],
+});
+assert.equal(smuggled.status, 400, "welcomes must be refused on non-commit messages");
+const epochBefore = (await must(alice, "GET", `/api/mls/groups/${GID}`)).epoch;
+const notMine = await api(alice, "POST", `/api/mls/groups/${GID}/messages`, {
+  kind: "commit", epoch: epochBefore, senderDeviceId: aDev, payload: b64(ct),
+  welcomes: [{ ref: cClaim.keyPackages[0].ref, deviceId: cDev, welcome: b64(ct) }],
+});
+assert.equal(notMine.status, 400, "a welcome must match a package the poster claimed");
+assert.equal((await must(alice, "GET", `/api/mls/groups/${GID}`)).epoch, epochBefore,
+  "a rejected commit must roll the epoch bump back");
+const carolStill = await q("SELECT 1 FROM channel_members WHERE channel_id=$1 AND user_id=$2", [channel.id, carol.id]);
+assert.equal(carolStill.rowCount, 0, "rejected welcomes must not grant membership");
+console.log("· welcomes are tied to the poster's own claim, on commits only");
 
 // Bob was never explicitly added to the channel — his Welcome granted it.
 const bobMember = await q(
