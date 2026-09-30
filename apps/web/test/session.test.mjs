@@ -223,6 +223,40 @@ assert.equal(await Cs.tryJoin(), true, "carol should join from the commit that d
 assert.equal(Cs.epoch, A.epoch, "carol and alice agree after a lost response");
 console.log("· lost responses resolved from the log: rolled back if absent, kept if landed");
 
+// ----------------------------------------------------------------- removal
+
+// Only an owner/admin may remove; a plain member's attempt is refused by the
+// server and must leave the refuser's MLS state untouched.
+as(bob); await B.sync();
+const bobEpoch = B.epoch;
+await assert.rejects(B.remove(carol.handle), /owner or admin/);
+assert.equal(B.epoch, bobEpoch, "a refused removal must roll back");
+
+as(alice);
+assert.ok(A.members().includes(carol.handle));
+await A.remove(carol.handle);
+assert.ok(!A.members().includes(carol.handle), "carol's leaf should be gone from alice's tree");
+const still = await q(
+  "SELECT 1 FROM channel_members WHERE channel_id=$1 AND user_id=$2", [A.channel.id, carol.id]);
+assert.equal(still.rowCount, 0, "removal should revoke channel membership");
+
+await A.send("after carol left");
+as(bob); await B.sync();
+assert.ok(texts(B).includes("after carol left"), "remaining members keep reading");
+assert.equal(B.epoch, A.epoch);
+
+// Carol notices, and even handed the ciphertext directly cannot read it.
+as(carol);
+const r = await Cs.sync();
+assert.equal(r.removed, true, "the removed device should learn it was removed");
+assert.ok(Cs.history.some((h) => h.notice?.includes("removed")));
+const { rows: [after] } = await q(
+  `SELECT payload FROM mls_messages WHERE group_id=$1 AND kind='application' ORDER BY seq DESC LIMIT 1`,
+  [Buffer.from(A.groupId, "base64")]);
+await assert.rejects(Cs.client.apply(new Uint8Array(after.payload)),
+  "a removed member must not decrypt anything sent after the removal");
+console.log("· owner removed carol: access revoked, and later messages are unreadable to her");
+
 await settle();                                     // let fire-and-forget cursor reports land
 await q("DELETE FROM users WHERE handle = ANY($1)", [["sess_alice", "sess_bob", "sess_carol", "sess_dave", "sess_mallory"]]);
 await pool.end();

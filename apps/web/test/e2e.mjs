@@ -21,12 +21,16 @@ async function newUser(browser, handle) {
   const context = await browser.newContext();
   const page = await context.newPage();
   const errors = [];
+  const user = { removed: false };
   page.on("pageerror", (e) => errors.push(e.message));
   page.on("console", (m) => {
     // A 401 from /api/auth/me on first paint is the expected "not signed in
-    // yet" probe, not a fault. Everything else counts.
+    // yet" probe, not a fault. So is the 404 on the group log that tells a
+    // removed member they were removed — but only once they have been.
     const t = m.text();
-    if (m.type() === "error" && !/status of 401/.test(t)) errors.push("console: " + t);
+    if (m.type() !== "error" || /status of 401/.test(t)) return;
+    if (user.removed && /status of 404/.test(t) && /\/messages/.test(m.location().url)) return;
+    errors.push("console: " + t);
   });
 
   const cdp = await context.newCDPSession(page);
@@ -43,7 +47,7 @@ async function newUser(browser, handle) {
   await page.getByPlaceholder("ghost_01").fill(handle);
   await page.getByRole("button", { name: "Create passkey" }).click();
   await page.getByRole("button", { name: "New channel" }).waitFor({ timeout: 90000 });
-  return { context, page, errors, handle };
+  return Object.assign(user, { context, page, errors, handle });
 }
 
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
@@ -122,6 +126,21 @@ for (const h of [alice.handle, bob.handle]) {
 }
 console.log("· member list shows both handles");
 if (process.env.SHOT) await alice.page.screenshot({ path: process.env.SHOT });
+
+// Alice (owner) removes bob from the member list; bob's console notices.
+bob.removed = true;
+await alice.page.getByRole("listitem").filter({ hasText: bob.handle })
+  .getByRole("button", { name: "Remove" }).click();
+await alice.page.getByRole("button", { name: "Remove", exact: true }).last().click();
+await alice.page.getByText(`Removed ${bob.handle}`).waitFor({ timeout: 30000 });
+await bob.page.getByText(/You were removed from this channel/).waitFor({ timeout: 30000 });
+const bobAfter = await bob.page.evaluate(async (o) => {
+  const r = await fetch(o + "/api/channels", { credentials: "same-origin" });
+  return (await r.json()).channels.length;
+}, ORIGIN);
+assert.equal(bobAfter, 0, "bob should no longer see the channel");
+console.log("· alice removed bob; bob's console shows it and the channel is gone for him");
+if (process.env.SHOT2) await bob.page.screenshot({ path: process.env.SHOT2 });
 
 const allErrors = [...alice.errors, ...bob.errors];
 if (allErrors.length) {

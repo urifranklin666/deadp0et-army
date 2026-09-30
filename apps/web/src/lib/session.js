@@ -338,8 +338,23 @@ export class GroupSession {
   sync() { return this.#exclusive(() => this.#sync()); }
 
   async #sync() {
-    if (!this.client) return { applied: 0 };
-    const res = await api.messages(this.groupId, this.cursor);
+    if (!this.client || this.removed) return { applied: 0, removed: !!this.removed };
+    let res;
+    try {
+      res = await api.messages(this.groupId, this.cursor);
+    } catch (e) {
+      // We were a member; a 404 now means we were removed. The server has
+      // cut our access, and the group has (or will have) moved to an epoch
+      // whose keys we never get. Stop asking.
+      if (e.status !== 404) throw e;
+      this.removed = true;
+      this.history.push({
+        seq: this.cursor, at: new Date().toISOString(),
+        notice: "You were removed from this channel. Nothing sent after that is readable to this device.",
+      });
+      await this.#persist();
+      return { applied: 0, removed: true };
+    }
     const { messages } = res;
     if (res.gap) {
       await this.#recoverFromGap(Number(res.watermark || 0));
@@ -463,6 +478,59 @@ export class GroupSession {
     }, 400 + Math.floor(Math.random() * 1600));
   }
 
+  /**
+   * Build a commit locally and get it into the log, or leave no trace.
+   *
+   * `build(client)` advances local state to the next epoch and returns
+   * { builtAtEpoch, commit, ... }; `extra(result)` adds fields to the post.
+   * If the server did not take the commit, nobody will ever follow us to that
+   * epoch, so roll back — or this device is forked off the group for good.
+   * An error response proves a refusal (the append is one transaction); with
+   * no response at all, ask the log whether it landed.
+   */
+  async #commit(build, extra = () => ({})) {
+    const before = this.client.exportState();
+    const res = await build(this.client);
+    try {
+      await api.postMessage(this.groupId, {
+        kind: "commit",
+        epoch: res.builtAtEpoch,
+        senderDeviceId: this.deviceId,
+        payload: b64(res.commit),
+        ...extra(res),
+      });
+    } catch (e) {
+      const landed = e.status ? false : await this.#ownCommitLanded(res.builtAtEpoch).catch(() => null);
+      if (landed === null) throw e;           // still can't tell; keep state, surface the error
+      if (!landed) {
+        const kp = await store.get(K.keyPackage(this.handle));
+        this.client = await MlsClient.restore(this.handle, { keyPackage: kp, state: before });
+        throw e;
+      }
+    }
+    await this.#persist();
+    return res;
+  }
+
+  /**
+   * Remove a member (all their devices) from the group and the channel.
+   * Only a channel owner or admin may; the server enforces that.
+   */
+  remove(handle) { return this.#exclusive(() => this.#remove(handle)); }
+
+  async #remove(handle) {
+    await this.#drain();
+    const res = await this.#commit(
+      (client) => client.removeMembers(handle),
+      () => ({ removes: [handle] }));
+    return res.removed;
+  }
+
+  /** The member handles in this group's current epoch, from the ratchet tree. */
+  members() {
+    return this.client ? [...new Set(this.client.members().map((m) => m.identity).filter(Boolean))] : [];
+  }
+
   /** Add another user by handle: claim their KeyPackage, commit, send Welcome. */
   invite(handle) { return this.#exclusive(() => this.#invite(handle)); }
 
@@ -480,32 +548,11 @@ export class GroupSession {
         throw new Error(`a key package for ${handle} claims to be ${JSON.stringify(who)}; refusing to add it`);
       }
     }
-    const before = this.client.exportState();
-    const add = await this.client.addMembers(keyPackages.map((k) => unb64(k.keyPackage)));
-    try {
-      await api.postMessage(this.groupId, {
-        kind: "commit",
-        epoch: add.builtAtEpoch,
-        senderDeviceId: this.deviceId,
-        payload: b64(add.commit),
-        welcomes: keyPackages.map((k) => ({
-          ref: k.ref, deviceId: k.deviceId, welcome: b64(add.welcome),
-        })),
-      });
-    } catch (e) {
-      // addMembers() already moved us to the next epoch locally. If the
-      // server did not take the commit, nobody else will ever follow us
-      // there — roll back, or this device is forked off the group for good.
-      // An error response proves a refusal (the append is one transaction).
-      // With no response at all, ask the log whether it landed.
-      const landed = e.status ? false : await this.#ownCommitLanded(add.builtAtEpoch).catch(() => null);
-      if (landed === null) throw e;           // still can't tell; keep state, surface the error
-      if (!landed) {
-        const kp = await store.get(K.keyPackage(this.handle));
-        this.client = await MlsClient.restore(this.handle, { keyPackage: kp, state: before });
-        throw e;
-      }
-    }
+    await this.#commit(
+      (client) => client.addMembers(keyPackages.map((k) => unb64(k.keyPackage))),
+      (add) => ({
+        welcomes: keyPackages.map((k) => ({ ref: k.ref, deviceId: k.deviceId, welcome: b64(add.welcome) })),
+      }));
     // Everything before the commit is undecryptable to the new member, so the
     // canvas would be blank for them. Re-publish the board at the new epoch.
     await this.#sendCanvasSnapshot();

@@ -20,7 +20,7 @@ async function ownedDevice(userId, deviceId) {
 /** Confirm the caller is a member of the channel backing this group. */
 async function groupMembership(userId, groupIdB64) {
   const { rows } = await q(
-    `SELECT g.group_id, g.epoch, g.ciphersuite, g.channel_id, g.compaction_watermark
+    `SELECT g.group_id, g.epoch, g.ciphersuite, g.channel_id, g.compaction_watermark, m.role
        FROM mls_groups g
        JOIN channel_members m ON m.channel_id = g.channel_id
       WHERE g.group_id = $1 AND m.user_id = $2`,
@@ -205,7 +205,7 @@ export async function mlsRoutes(app) {
    * a second, divergent history. The loser re-fetches and rebuilds.
    */
   app.post("/api/mls/groups/:groupId/messages", { preHandler: requireSession }, async (req, reply) => {
-    const { kind, payload, epoch, senderDeviceId, welcomes, retentionDays } = req.body || {};
+    const { kind, payload, epoch, senderDeviceId, welcomes, removes, retentionDays } = req.body || {};
     if (!["application", "commit", "proposal"].includes(kind)) {
       return reply.code(400).send({ error: "kind must be application|commit|proposal" });
     }
@@ -221,6 +221,20 @@ export async function mlsRoutes(app) {
     const adds = Array.isArray(welcomes) ? welcomes : [];
     if (adds.length && kind !== "commit") {
       return reply.code(400).send({ error: "welcomes only ride along with a commit" });
+    }
+
+    // Removal. The commit itself is opaque, so the server cannot see who it
+    // removes from the MLS group; `removes` names them so their access to the
+    // channel's ciphertext ends with the same transaction. Cryptographically
+    // they are already out — the next epoch's keys never reach them. Only a
+    // channel owner or admin may do this, and never to an owner or themself.
+    const drops = Array.isArray(removes) ? [...new Set(removes.map(String))] : [];
+    if (drops.length) {
+      if (kind !== "commit") return reply.code(400).send({ error: "removes only ride along with a commit" });
+      if (!["owner", "admin"].includes(g.role)) {
+        return reply.code(403).send({ error: "only a channel owner or admin can remove members" });
+      }
+      if (drops.includes(req.user.handle)) return reply.code(400).send({ error: "cannot remove yourself" });
     }
 
     // Retention applies to application traffic only. A commit or proposal
@@ -301,6 +315,26 @@ export async function mlsRoutes(app) {
             `INSERT INTO mls_device_cursors(group_id, device_id, last_seq)
              VALUES ($1,$2,$3) ON CONFLICT (group_id, device_id) DO NOTHING`,
             [g.group_id, w.deviceId, seq]);
+        }
+        for (const handle of drops) {
+          const { rows: gone } = await c.query(
+            `DELETE FROM channel_members m USING users u
+              WHERE m.channel_id = $1 AND m.user_id = u.id AND u.handle = $2 AND m.role <> 'owner'
+          RETURNING m.user_id`, [g.channel_id, handle]);
+          if (!gone.length) {
+            throw Object.assign(new Error(`${handle} is not a removable member of this channel`),
+              { statusCode: 400 });
+          }
+          // Their devices stop pinning compaction and lose any pending join.
+          await c.query(
+            `DELETE FROM mls_device_cursors
+              WHERE group_id = $1 AND device_id IN (SELECT id FROM devices WHERE user_id = $2)`,
+            [g.group_id, gone[0].user_id]);
+          await c.query(
+            `DELETE FROM mls_welcomes
+              WHERE group_id = $1 AND delivered_at IS NULL
+                AND target_device_id IN (SELECT id FROM devices WHERE user_id = $2)`,
+            [g.group_id, gone[0].user_id]);
         }
         return { seq, epoch: writeEpoch };
       });

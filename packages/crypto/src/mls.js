@@ -164,6 +164,37 @@ export class MlsClient {
     };
   }
 
+  /** Every occupied leaf in the current epoch, with its credential identity. */
+  members() {
+    if (!this.#state) return [];
+    const out = [];
+    this.#state.ratchetTree.forEach((node, i) => {
+      if (i % 2 || node?.nodeType !== "leaf") return;   // leaves sit at even node indices
+      const cred = node.leaf.credential;
+      out.push({ leafIndex: i / 2, identity: cred.credentialType === "basic" ? fromUtf8(cred.identity) : null });
+    });
+    return out;
+  }
+
+  /**
+   * Commit the removal of every leaf whose credential names `identity` (one
+   * per device). The removed members never learn the next epoch's secrets,
+   * so nothing sent after this commit is readable to them. As with adds, the
+   * caller must submit the commit at the epoch it was built against.
+   */
+  async removeMembers(identity) {
+    const own = this.#state.privatePath?.leafIndex;
+    const leaves = this.members().filter((m) => m.identity === identity && m.leafIndex !== own);
+    if (!leaves.length) throw new Error(`${identity} is not in this group`);
+    const builtAtEpoch = this.epoch;
+    const res = await createCommit(
+      { state: this.#state, cipherSuite: this.#cs },
+      { extraProposals: leaves.map((m) => ({ proposalType: "remove", remove: { removed: m.leafIndex } })),
+        ratchetTreeExtension: true });
+    this.#state = res.newState;
+    return { builtAtEpoch, commit: encodeMlsMessage(res.commit), removed: leaves.length };
+  }
+
   /** Join from a Welcome produced by someone else's add commit. */
   async joinFromWelcome(encodedWelcome) {
     if (!this.#kp) throw new Error("call newKeyPackage() first");

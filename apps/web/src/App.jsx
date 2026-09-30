@@ -309,8 +309,17 @@ function App() {
     let dead = false;
     const pull = async () => {
       try {
-        const { applied } = await active.sync();
-        if (!dead && applied) bump();
+        const { applied, removed } = await active.sync();
+        if (dead) return;
+        if (removed) {
+          // Access is gone server-side; polling again would only 404.
+          clearInterval(id);
+          const { channels: list } = await api.channels().catch(() => ({ channels: null }));
+          if (!dead && list) setChannels(list);
+          bump();
+          return;
+        }
+        if (applied) bump();
       } catch (e) {
         if (!dead) setErr(e.message);
       }
@@ -432,6 +441,26 @@ function App() {
         />
       ) : null}
 
+      {modal?.kind === "remove" ? (
+        <ConfirmModal
+          title={`Remove ${modal.handle}`}
+          body={`${modal.handle} loses access to #${modal.session.channel.slug} and cannot read anything sent from now on. What they already received stays on their devices.`}
+          confirmLabel="Remove"
+          danger
+          onConfirm={async () => {
+            try {
+              await modal.session.remove(modal.handle);
+              bump();
+              setNotice(`Removed ${modal.handle} from #${modal.session.channel.slug}.`);
+            } catch (e) {
+              setErr(e.message);
+              throw e;
+            }
+          }}
+          onClose={() => setModal(null)}
+        />
+      ) : null}
+
       {modal?.kind === "clear" ? (
         <ConfirmModal
           title="Clear the board"
@@ -466,7 +495,7 @@ function EmptyState() {
  * epoch moves, since adds are commits. (This is membership of the channel,
  * i.e. who may fetch its ciphertext; who can decrypt is the MLS group.)
  */
-function Members({ session }) {
+function Members({ session, openModal }) {
   const [members, setMembers] = useState(null);
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
@@ -488,7 +517,11 @@ function Members({ session }) {
     return () => { document.removeEventListener("mousedown", close); document.removeEventListener("keydown", esc); };
   }, [open]);
 
-  if (!members) return null;
+  if (!members || session.removed) return null;
+  // The server enforces this too; here it only decides whether to offer it.
+  const mine = members.find((m) => m.handle === session.handle);
+  const canRemove = (m) => ["owner", "admin"].includes(mine?.role)
+    && m.handle !== session.handle && m.role !== "owner" && !!session.client;
   return (
     <div ref={ref} className="relative">
       <button onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-label="Members"
@@ -503,6 +536,12 @@ function Members({ session }) {
               <span className="font-mono text-slate-200">{m.handle}</span>
               {m.role !== "member" ? (
                 <span className="text-[10px] uppercase tracking-wider text-rose-400/80">{m.role}</span>
+              ) : canRemove(m) ? (
+                <button onClick={() => { setOpen(false); openModal({ kind: "remove", session, handle: m.handle }); }}
+                  className="rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-slate-500
+                    hover:bg-rose-600/20 hover:text-rose-300">
+                  Remove
+                </button>
               ) : null}
             </li>
           ))}
@@ -520,7 +559,8 @@ function Conversation({ session, onError, onChange, openModal }) {
 
   useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [session.history.length]);
 
-  const joined = !!session.client;
+  // A removed session keeps its transcript readable but can no longer act.
+  const joined = !!session.client && !session.removed;
 
   const send = async () => {
     const text = draft.trim();
@@ -554,7 +594,7 @@ function Conversation({ session, onError, onChange, openModal }) {
         </div>
 
         <div className="ml-auto flex items-center gap-2">
-          <Members session={session} />
+          <Members session={session} openModal={openModal} />
           <button onClick={async () => { try { await session.sync(); onChange(); } catch (e) { onError(e.message); } }}
             className="rounded p-1.5 text-slate-500 hover:bg-white/5 hover:text-white" aria-label="Sync">
             <RefreshCw className="h-3.5 w-3.5" />
@@ -569,7 +609,7 @@ function Conversation({ session, onError, onChange, openModal }) {
       {mode === "canvas" ? <Canvas session={session} onError={onError} openModal={openModal} /> : (
       <>
       <div className="dp-scroll min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        {!joined ? (
+        {!session.client ? (
           <p className="mx-auto max-w-sm text-center text-[11px] leading-relaxed text-slate-600">
             This device isn't a member yet. Once someone invites you, the Welcome arrives on the
             next poll and history starts from that point — earlier traffic stays unreadable, by design.
@@ -619,7 +659,7 @@ function Conversation({ session, onError, onChange, openModal }) {
             disabled={!joined}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-            placeholder={joined ? "Encrypted before it leaves this tab…" : "Not a member yet"}
+            placeholder={joined ? "Encrypted before it leaves this tab…" : session.removed ? "Removed from this channel" : "Not a member yet"}
             className="dp-scroll max-h-32 min-h-[38px] flex-1 resize-none rounded-lg border border-white/10 bg-black/50
               px-3 py-2 text-sm text-white outline-none transition-colors placeholder:text-slate-600
               focus:border-rose-500/60 disabled:opacity-50"

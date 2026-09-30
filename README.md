@@ -79,6 +79,18 @@ A founder's leaf comes from a fresh package that is never published, and a
 claimer may hold only a few unused claims against any one user, so nobody can
 drain someone else's pool.
 
+**Removal is a commit plus a revocation.** An owner or admin removes someone
+with an MLS remove commit, so the next epoch's keys never reach them; the same
+request names them so the server drops their channel membership, delivery
+cursors and pending Welcomes in that transaction. The server cannot check that
+the opaque commit really removes who it names, which is why only owners and
+admins may send one.
+
+**Messages are attributed by credential.** The sender shown on a message is
+the credential of the MLS leaf that signed it, not anything the server says.
+Since anyone can write any identity into their own KeyPackage, an inviter
+refuses packages whose credential doesn't name the handle being invited.
+
 **Group state is touched by one operation at a time.** Encrypting and applying
 both read the ratchet, await, and write it back; a sync landing mid-send could
 otherwise roll one of them back. A sender also never advances its read cursor

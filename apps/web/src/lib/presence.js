@@ -24,7 +24,7 @@ export class Presence {
   }
 
   connect() {
-    if (this.closed || !this.session.client || !this.session.groupId) return;
+    if (this.closed || !this.session.client || this.session.removed || !this.session.groupId) return;
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     const url = `${proto}//${location.host}/api/mls/groups/${encodeURIComponent(this.session.groupId)}/live`;
 
