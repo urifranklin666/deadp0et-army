@@ -33,7 +33,8 @@ const as = (user) => { cookie = user.cookie; };
 const { GroupSession, ensureDevice, topUpKeyPackages } = await import("../src/lib/session.js");
 const { api } = await import("../src/lib/api.js");
 const { store, K } = await import("../src/lib/db.js");
-const { unb64 } = await import("@deadp0et/crypto/mls");
+const { MlsClient, SUITE, b64, unb64 } = await import("@deadp0et/crypto/mls");
+
 const { decodeMlsMessage } = await import("ts-mls");
 
 async function seedUser(handle) {
@@ -106,6 +107,8 @@ assert.deepEqual(A.history.map((h) => h.text),
   "the transcript must stay in log order even though alice's send was recorded first");
 as(bob); await B.sync();
 assert.deepEqual(texts(B), ["from alice"]);
+assert.equal(B.history.find((h) => h.text === "from alice").from, alice.handle,
+  "a message should be attributed to its sender's MLS credential");
 assert.equal(errors(B).length, 0);
 console.log("· sending never skips another member's unfetched message");
 
@@ -150,6 +153,23 @@ assert.ok(onServer.length >= 3, "the refill should publish packages");
 assert.ok(onServer.every((r) => pooledRefs.includes(r.ref)),
   "every published package must still have its private half locally");
 console.log("· concurrent refills keep every published package openable");
+
+// ------------------------------------ an invitee can't pose as someone else
+
+// Mallory publishes a KeyPackage whose credential says "sess_alice". Anyone
+// inviting mallory must refuse it, or mallory's messages would read as alice's.
+const mallory = await seedUser("sess_mallory");
+as(mallory);
+const mDev = (await ensureDevice(mallory.handle)).deviceId;
+await q("UPDATE mls_key_packages SET claimed_at = now() WHERE device_id=$1", [mDev]);  // only the forgery left
+const forger = await MlsClient.create(alice.handle);
+const forged = await forger.newKeyPackage();
+await api.publishKeyPackages(mDev, SUITE, [{ ref: b64(forged.ref), keyPackage: b64(forged.encoded) }]);
+as(bob);
+const epochBeforeForgery = B.epoch;
+await assert.rejects(B.invite(mallory.handle), /claims to be "sess_alice"/);
+assert.equal(B.epoch, epochBeforeForgery, "a refused invitee must not change the group");
+console.log("· invite refuses a key package whose credential names someone else");
 
 // ----------------------------------------- refused commit rolls back
 
@@ -204,6 +224,6 @@ assert.equal(Cs.epoch, A.epoch, "carol and alice agree after a lost response");
 console.log("· lost responses resolved from the log: rolled back if absent, kept if landed");
 
 await settle();                                     // let fire-and-forget cursor reports land
-await q("DELETE FROM users WHERE handle = ANY($1)", [["sess_alice", "sess_bob", "sess_carol", "sess_dave"]]);
+await q("DELETE FROM users WHERE handle = ANY($1)", [["sess_alice", "sess_bob", "sess_carol", "sess_dave", "sess_mallory"]]);
 await pool.end();
 console.log("\nALL SESSION ASSERTIONS PASSED");

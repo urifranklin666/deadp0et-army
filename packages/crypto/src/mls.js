@@ -29,6 +29,9 @@ import {
   defaultKeyRetentionConfig, defaultLifetimeConfig, defaultKeyPackageEqualityConfig,
   defaultPaddingConfig, defaultAuthenticationService,
 } from "ts-mls";
+// Not re-exported from the index, but a public subpath ("./*.js" in ts-mls's
+// exports map). Needed to learn WHICH member sent an application message.
+import { decryptSenderData } from "ts-mls/privateMessage.js";
 
 /**
  * ClientState is GroupState & { clientConfig }, but encodeGroupState only
@@ -80,6 +83,19 @@ export const unb64 = (s) => {
 
 const utf8 = new TextEncoder();
 const fromUtf8 = (u8) => new TextDecoder().decode(u8);
+
+/**
+ * The identity a KeyPackage's credential claims. Anyone can write any
+ * identity into their own KeyPackage, so an inviter must check this against
+ * the handle they meant to add — otherwise a member could join as someone
+ * else, and every message they sent would be attributed to that someone.
+ */
+export function keyPackageIdentity(encoded) {
+  const msg = decode(encoded);
+  if (msg.wireformat !== "mls_key_package") throw new Error("not a key package");
+  const cred = msg.keyPackage.leafNode.credential;
+  return cred.credentialType === "basic" ? fromUtf8(cred.identity) : null;
+}
 
 /** Stable identifier for a KeyPackage, used to address its Welcome. */
 export async function keyPackageRef(encoded) {
@@ -171,11 +187,42 @@ export class MlsClient {
    * applied in server `seq` order.
    */
   async apply(encoded) {
+    return (await this.applyWithSender(encoded)).text;
+  }
+
+  /**
+   * apply(), plus the identity of the member who sent it.
+   *
+   * `sender` is the credential identity of the sending leaf. It is
+   * authenticated, not merely claimed: processing verifies the content's
+   * signature against that leaf's key, and would throw otherwise. It is null
+   * for commits/proposals and when the sender can't be resolved.
+   */
+  async applyWithSender(encoded) {
     const msg = decode(encoded);
-    if (msg.wireformat !== "mls_private_message") return null;
+    if (msg.wireformat !== "mls_private_message") return { text: null, sender: null };
+    const sender = await this.#senderOf(msg.privateMessage).catch(() => null);
     const res = await processPrivateMessage(this.#state, msg.privateMessage, emptyPskIndex, this.#cs);
     this.#state = res.newState;
-    return res.kind === "applicationMessage" ? fromUtf8(res.message) : null;
+    return res.kind === "applicationMessage"
+      ? { text: fromUtf8(res.message), sender }
+      : { text: null, sender: null };
+  }
+
+  /** Resolve a private message's sending leaf to its credential identity. */
+  async #senderOf(pm) {
+    const s = this.#state;
+    // Messages from the current epoch use its secrets; a straggler from an
+    // earlier one uses whatever ts-mls kept for that epoch.
+    const data = BigInt(pm.epoch) === BigInt(s.groupContext.epoch)
+      ? { senderDataSecret: s.keySchedule.senderDataSecret, ratchetTree: s.ratchetTree }
+      : s.historicalReceiverData?.get(pm.epoch);
+    if (!data) return null;
+    const sd = await decryptSenderData(pm, data.senderDataSecret, this.#cs);
+    const node = sd && data.ratchetTree[sd.leafIndex * 2];   // leaf i lives at node 2i
+    if (node?.nodeType !== "leaf") return null;
+    const cred = node.leaf.credential;
+    return cred.credentialType === "basic" ? fromUtf8(cred.identity) : null;
   }
 
   // -------------------------------------------------------------- presence

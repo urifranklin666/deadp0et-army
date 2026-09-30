@@ -1,6 +1,6 @@
 import * as Y from "yjs";
 import { startRegistration, startAuthentication } from "@simplewebauthn/browser";
-import { MlsClient, SUITE, b64, unb64 } from "@deadp0et/crypto/mls";
+import { MlsClient, SUITE, b64, unb64, keyPackageIdentity } from "@deadp0et/crypto/mls";
 import { api } from "./api.js";
 import { store, K } from "./db.js";
 import { T, decodeEnvelope, encodeEnvelope } from "./envelope.js";
@@ -356,7 +356,7 @@ export class GroupSession {
         continue;
       }
       try {
-        const text = await this.client.apply(unb64(m.payload));
+        const { text, sender } = await this.client.applyWithSender(unb64(m.payload));
         if (text !== null) {
           const env = decodeEnvelope(text);
           if (env.t === T.Y_UPDATE || env.t === T.Y_SNAPSHOT) {
@@ -368,8 +368,10 @@ export class GroupSession {
             // stagger so a large group doesn't publish N identical snapshots.
             if (m.senderDeviceId !== this.deviceId) this.#answerSnapshotRequest();
           } else {
+            // `from` comes from the MLS credential of the signing leaf, not
+            // from anything the server says about who posted it.
             this.history.push({
-              seq: m.seq, text: env.b, at: m.createdAt,
+              seq: m.seq, text: env.b, at: m.createdAt, from: sender,
               mine: m.senderDeviceId === this.deviceId,
             });
           }
@@ -469,6 +471,15 @@ export class GroupSession {
     // refuses it, so catch up on anyone else's commits first.
     await this.#drain();
     const { keyPackages } = await api.claimKeyPackages(handle, SUITE);
+    // Whatever a KeyPackage's credential says is what every member will see
+    // on that member's messages, and its owner chose it. Refuse any that
+    // don't name the person we meant to invite.
+    for (const k of keyPackages) {
+      const who = keyPackageIdentity(unb64(k.keyPackage));
+      if (who !== handle) {
+        throw new Error(`a key package for ${handle} claims to be ${JSON.stringify(who)}; refusing to add it`);
+      }
+    }
     const before = this.client.exportState();
     const add = await this.client.addMembers(keyPackages.map((k) => unb64(k.keyPackage)));
     try {

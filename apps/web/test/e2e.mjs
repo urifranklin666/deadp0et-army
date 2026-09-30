@@ -103,6 +103,20 @@ const afterInvite = await bob.page.evaluate(async (o) => {
 assert.equal(afterInvite.length, 1, "the Welcome should have granted bob channel membership");
 console.log("· invite granted bob membership via Welcome");
 
+// Bob joins from the Welcome and replies; alice must see the reply attributed
+// to bob — a name taken from his MLS credential, not from the server.
+await bob.page.getByText(slug, { exact: true }).first().click({ timeout: 30000 });
+await bob.page.getByText(/^epoch \d+$/).waitFor({ timeout: 30000 });
+const REPLY = "reply " + rnd();
+await bob.page.getByPlaceholder(/Encrypted before it leaves/).fill(REPLY);
+await bob.page.getByRole("button", { name: "Send" }).click();
+await bob.page.getByText(REPLY).waitFor({ timeout: 30000 });
+const bubble = alice.page.locator("li", { hasText: REPLY });
+await bubble.waitFor({ timeout: 30000 });
+assert.ok((await bubble.innerText()).includes(bob.handle), "alice should see bob's handle on his message");
+console.log("· bob replied; alice sees it attributed to", bob.handle);
+if (process.env.SHOT) await alice.page.screenshot({ path: process.env.SHOT });
+
 const allErrors = [...alice.errors, ...bob.errors];
 if (allErrors.length) {
   console.log("\nPAGE ERRORS:\n  " + allErrors.join("\n  "));
