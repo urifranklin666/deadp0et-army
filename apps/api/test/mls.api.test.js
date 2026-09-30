@@ -96,6 +96,25 @@ assert.equal(again.status, 409, "a claimed key package must not be reissued");
 console.log("· key package claimed exactly once (second claim 409s)");
 
 const addBob = await A.addMembers([unb64(claimed.keyPackages[0].keyPackage)]);
+
+// A Welcome grants channel membership, so it must name a key package that
+// was really claimed from the target device. Forging one for an outsider's
+// device must be refused, and must not consume the epoch.
+const bystander = await seedUser("mls_bystander");
+const byDev = await registerDevice(bystander, "bystander-web");
+const forged = await api(alice, "POST", `/api/mls/groups/${GID}/messages`, {
+  kind: "commit", epoch: addBob.builtAtEpoch, senderDeviceId: aDev,
+  payload: b64(addBob.commit),
+  welcomes: [{ ref: claimed.keyPackages[0].ref, deviceId: byDev, welcome: b64(addBob.welcome) }],
+});
+assert.equal(forged.status, 400, "a welcome for an unclaimed device must be rejected");
+const byMember = await q(
+  "SELECT 1 FROM channel_members WHERE channel_id=$1 AND user_id=$2", [channel.id, bystander.id]);
+assert.equal(byMember.rowCount, 0, "a forged welcome must not grant channel membership");
+assert.equal((await must(alice, "GET", `/api/mls/groups/${GID}`)).epoch, 0,
+  "a rejected commit must not advance the epoch");
+console.log("· forged welcome rejected; epoch untouched");
+
 const posted = await must(alice, "POST", `/api/mls/groups/${GID}/messages`, {
   kind: "commit", epoch: addBob.builtAtEpoch, senderDeviceId: aDev,
   payload: b64(addBob.commit),
@@ -130,6 +149,18 @@ console.log("· bob joined from welcome; both at epoch", B.epoch);
 
 const acked = await must(bob, "GET", `/api/mls/devices/${bDev}/welcomes`);
 assert.equal(acked.welcomes.length, 0, "acked welcome must not be redelivered");
+
+// Until bob reports a cursor himself, compaction must still see him — pinned
+// at the commit that added him.
+const seeded = await q(
+  "SELECT last_seq FROM mls_device_cursors WHERE group_id=$1 AND device_id=$2",
+  [groupIdBytes, bDev]);
+assert.equal(Number(seeded.rows[0]?.last_seq), posted.seq, "welcome should seed the joiner's cursor");
+console.log("· joiner's delivery cursor seeded at seq", posted.seq);
+
+// Garbage paging parameters fall back to defaults rather than a 500.
+const junk = await api(bob, "GET", `/api/mls/groups/${GID}/messages?since=abc&limit=-3`);
+assert.equal(junk.status, 200, "malformed since/limit should not error");
 
 // ------------------------------------------------------- application flow
 
@@ -197,6 +228,6 @@ assert.equal(peek.status, 404, "a non-member must not read the group log");
 console.log("· non-member cannot read the log (404)");
 
 await q("DELETE FROM users WHERE handle = ANY($1)",
-  [["mls_alice", "mls_bob", "mls_carol", "mls_outsider"]]);
+  [["mls_alice", "mls_bob", "mls_carol", "mls_outsider", "mls_bystander"]]);
 await pool.end();
 console.log("\nALL MLS DELIVERY-SERVICE ASSERTIONS PASSED");

@@ -12,6 +12,12 @@ export { SUITE };
 // enough that snapshots are a small fraction of the log.
 const SNAPSHOT_EVERY = 25;
 
+// KeyPackages are single-use: each invite claims one from the server. Keep a
+// small pool published so this device can be added to more than one group,
+// and refill it whenever it runs low.
+const KP_LOW_WATER = 3;
+const KP_TARGET = 8;
+
 /* --------------------------------------------------------------- identity */
 
 export async function register(handle) {
@@ -27,20 +33,19 @@ export async function login(handle) {
 }
 
 /**
- * Ensure this browser has a registered device and a published KeyPackage.
+ * Ensure this browser has a registered device and published KeyPackages.
  *
- * The KeyPackage private half lives only here, so it is generated once and
- * persisted; regenerating on every load would orphan any Welcome already
- * addressed to the previous one.
+ * The primary KeyPackage doubles as the device's stable identity and is what
+ * a group founder's leaf is built from, so it is generated once and
+ * persisted. Invitable KeyPackages come from a separate pool (see
+ * topUpKeyPackages): their private halves are also kept only here, because
+ * regenerating them would orphan any Welcome already addressed to one.
  */
 export async function ensureDevice(handle) {
   let saved = await store.get(K.keyPackage(handle));
-  let client;
 
-  if (saved) {
-    client = await MlsClient.restore(handle, { keyPackage: saved });
-  } else {
-    client = await MlsClient.create(handle);
+  if (!saved) {
+    const client = await MlsClient.create(handle);
     await client.newKeyPackage();
     saved = client.exportKeyPackage();
     await store.set(K.keyPackage(handle), saved);
@@ -51,12 +56,43 @@ export async function ensureDevice(handle) {
   const { deviceId } = await api.registerDevice("web", saved.public.slice(0, 512));
   await store.set(K.device(handle), deviceId);
 
-  // Publish (idempotent server-side: duplicate refs are ignored).
-  const kp = client.exportKeyPackage();
-  const ref = b64(await sha256(unb64(kp.public)));
-  await api.publishKeyPackages(deviceId, SUITE, [{ ref, keyPackage: kp.public }]).catch(() => {});
-
+  await topUpKeyPackages(handle, deviceId).catch(() => {});
   return { deviceId, keyPackage: saved };
+}
+
+/**
+ * Keep enough unclaimed KeyPackages on the server for this device to be
+ * invited. Publishing is idempotent server-side (duplicate refs are ignored),
+ * so re-sending the primary package doubles as a cheap "how many are left".
+ */
+export async function topUpKeyPackages(handle, deviceId) {
+  const primary = await store.get(K.keyPackage(handle));
+  if (!primary) return 0;
+  const { available } = await api.publishKeyPackages(deviceId, SUITE, [
+    { ref: await kpRef(primary), keyPackage: primary.public },
+  ]);
+  if (available >= KP_LOW_WATER) return available;
+
+  const pool = (await store.get(K.keyPackagePool(handle))) || {};
+  const fresh = [];
+  for (let i = available; i < KP_TARGET; i++) {
+    const c = await MlsClient.create(handle);
+    await c.newKeyPackage();
+    const kp = c.exportKeyPackage();
+    const ref = await kpRef(kp);
+    pool[ref] = kp;
+    fresh.push({ ref, keyPackage: kp.public });
+  }
+  // Private halves are stored BEFORE the public halves are published, so a
+  // Welcome can never arrive for a package this device has already lost.
+  await store.set(K.keyPackagePool(handle), pool);
+  const res = await api.publishKeyPackages(deviceId, SUITE, fresh);
+  return res.available;
+}
+
+/** The ref the server files a KeyPackage under, and addresses Welcomes by. */
+async function kpRef(exported) {
+  return b64(await sha256(unb64(exported.public)));
 }
 
 async function sha256(bytes) {
@@ -93,6 +129,21 @@ export class GroupSession {
     this.#wireDoc();
   }
 
+  /**
+   * Serialise everything that touches MLS state.
+   *
+   * encrypt() and apply() each read the ratchet, await, then write it back.
+   * Interleaving them (a background sync landing mid-send) would let one
+   * overwrite the other's advance — at worst re-deriving an already-used
+   * key/nonce pair. So every public entry point runs one at a time.
+   */
+  #queue = Promise.resolve();
+  #exclusive(fn) {
+    const run = this.#queue.then(fn, fn);
+    this.#queue = run.catch(() => {});
+    return run;
+  }
+
   get epoch() { return this.client ? this.client.epoch : null; }
 
   #wireDoc() {
@@ -121,7 +172,9 @@ export class GroupSession {
     this.flushTimer = setTimeout(() => this.flushCanvas().catch(() => {}), 220);
   }
 
-  async flushCanvas() {
+  flushCanvas() { return this.#exclusive(() => this.#flushCanvas()); }
+
+  async #flushCanvas() {
     if (!this.client || !this.pendingUpdates?.length) return;
     const merged = Y.mergeUpdates(this.pendingUpdates);
     this.pendingUpdates = [];
@@ -133,7 +186,7 @@ export class GroupSession {
     // up. A snapshot makes the tail self-contained.
     this.updatesSinceSnapshot = (this.updatesSinceSnapshot || 0) + 1;
     if (this.updatesSinceSnapshot >= SNAPSHOT_EVERY) {
-      try { await this.sendCanvasSnapshot(); } catch { /* retried next flush */ }
+      try { await this.#sendCanvasSnapshot(); } catch { /* retried next flush */ }
     }
     await this.#persist();
   }
@@ -156,12 +209,17 @@ export class GroupSession {
     const { seq } = await api.postMessage(this.groupId, {
       kind: "application", senderDeviceId: this.deviceId, payload: b64(ct),
     });
-    this.cursor = Math.max(this.cursor, seq);
+    // Deliberately NOT advancing the cursor to `seq`: other members may have
+    // posted between our last sync and this send, and jumping past them would
+    // skip messages that can never be fetched again. sync() steps over our
+    // own entries instead.
     return seq;
   }
 
   /** Restore from local storage, or create the group if we are its founder. */
-  async open(groupIdB64) {
+  open(groupIdB64) { return this.#exclusive(() => this.#open(groupIdB64)); }
+
+  async #open(groupIdB64) {
     const kp = await store.get(K.keyPackage(this.handle));
 
     if (groupIdB64) {
@@ -186,12 +244,17 @@ export class GroupSession {
   }
 
   /** Accept a pending Welcome for this device, if one exists. */
-  async tryJoin() {
+  tryJoin() { return this.#exclusive(() => this.#tryJoin()); }
+
+  async #tryJoin() {
     const { welcomes } = await api.welcomes(this.deviceId);
     const mine = welcomes.find((w) => w.groupId === this.groupId);
     if (!mine) return false;
 
-    const kp = await store.get(K.keyPackage(this.handle));
+    // The Welcome is addressed to one specific KeyPackage; only its private
+    // half can open it. Older devices only ever had the primary package.
+    const pool = (await store.get(K.keyPackagePool(this.handle))) || {};
+    const kp = pool[mine.ref] || (await store.get(K.keyPackage(this.handle)));
     this.client = await MlsClient.restore(this.handle, { keyPackage: kp });
     await this.client.joinFromWelcome(unb64(mine.welcome));
     // Start reading after the commit that added us; earlier traffic is not
@@ -200,6 +263,14 @@ export class GroupSession {
     this.history = [];
     await api.ackWelcomes(this.deviceId, [mine.id]);
     await this.#persist();
+    // The group state now holds everything the join needed; the package's
+    // init key has done its job, and keeping it would only weaken forward
+    // secrecy. Then replace what the inviter claimed.
+    if (pool[mine.ref]) {
+      delete pool[mine.ref];
+      await store.set(K.keyPackagePool(this.handle), pool);
+    }
+    topUpKeyPackages(this.handle, this.deviceId).catch(() => {});
     // The canvas so far is unreadable to us — we lacked the keys. An existing
     // member sends a snapshot after inviting; until it lands the board is blank.
     return true;
@@ -229,7 +300,9 @@ export class GroupSession {
   }
 
   /** Pull new log entries and apply them in order. */
-  async sync() {
+  sync() { return this.#exclusive(() => this.#sync()); }
+
+  async #sync() {
     if (!this.client) return { applied: 0 };
     const res = await api.messages(this.groupId, this.cursor);
     const { messages } = res;
@@ -240,6 +313,13 @@ export class GroupSession {
     }
     let applied = 0;
     for (const m of messages) {
+      if (m.senderDeviceId === this.deviceId) {
+        // Our own entry. Its effect is already in local state — encrypt()
+        // and addMembers() advance the ratchet as they build — and MLS gives
+        // a sender no way to decrypt what it sent. Just step past it.
+        this.cursor = m.seq;
+        continue;
+      }
       try {
         const text = await this.client.apply(unb64(m.payload));
         if (text !== null) {
@@ -277,7 +357,9 @@ export class GroupSession {
     return { applied };
   }
 
-  async send(text) {
+  send(text) { return this.#exclusive(() => this.#send(text)); }
+
+  async #send(text) {
     const seq = await this.#sendEnvelope({ t: T.CHAT, b: text });
     // Our own message is never echoed back through apply() — the sender's
     // ratchet has already moved past it — so record it directly.
@@ -287,12 +369,23 @@ export class GroupSession {
   }
 
   /** Hand a late joiner the whole board in one message. */
-  async sendCanvasSnapshot() {
+  sendCanvasSnapshot() { return this.#exclusive(() => this.#sendCanvasSnapshot()); }
+
+  async #sendCanvasSnapshot() {
     if (!this.client) return;
     this.updatesSinceSnapshot = 0;
     const seq = await this.#sendEnvelope({ t: T.Y_SNAPSHOT, u: b64(Y.encodeStateAsUpdate(this.doc)) });
     this.lastSnapshotSeq = seq;
     return seq;
+  }
+
+  /** Sync until the server has nothing newer for us. */
+  async #drain() {
+    for (let i = 0; i < 50; i++) {
+      const before = this.cursor;
+      const res = await this.#sync();
+      if (res.recovered || this.cursor === before) return;
+    }
   }
 
   /**
@@ -311,21 +404,39 @@ export class GroupSession {
   }
 
   /** Add another user by handle: claim their KeyPackage, commit, send Welcome. */
-  async invite(handle) {
+  invite(handle) { return this.#exclusive(() => this.#invite(handle)); }
+
+  async #invite(handle) {
+    // A commit must be built against the group's CURRENT epoch or the server
+    // refuses it, so catch up on anyone else's commits first.
+    await this.#drain();
     const { keyPackages } = await api.claimKeyPackages(handle, SUITE);
+    const before = this.client.exportState();
     const add = await this.client.addMembers(keyPackages.map((k) => unb64(k.keyPackage)));
-    await api.postMessage(this.groupId, {
-      kind: "commit",
-      epoch: add.builtAtEpoch,
-      senderDeviceId: this.deviceId,
-      payload: b64(add.commit),
-      welcomes: keyPackages.map((k) => ({
-        ref: k.ref, deviceId: k.deviceId, welcome: b64(add.welcome),
-      })),
-    });
+    try {
+      await api.postMessage(this.groupId, {
+        kind: "commit",
+        epoch: add.builtAtEpoch,
+        senderDeviceId: this.deviceId,
+        payload: b64(add.commit),
+        welcomes: keyPackages.map((k) => ({
+          ref: k.ref, deviceId: k.deviceId, welcome: b64(add.welcome),
+        })),
+      });
+    } catch (e) {
+      // addMembers() already moved us to the next epoch locally. If the
+      // server refused the commit, nobody else will ever follow us there —
+      // roll back, or this device is forked off the group for good. Only an
+      // actual error response proves a refusal (the append is one
+      // transaction); a lost response may have landed, so keep the new state.
+      if (!e.status) throw e;
+      const kp = await store.get(K.keyPackage(this.handle));
+      this.client = await MlsClient.restore(this.handle, { keyPackage: kp, state: before });
+      throw e;
+    }
     // Everything before the commit is undecryptable to the new member, so the
     // canvas would be blank for them. Re-publish the board at the new epoch.
-    await this.sendCanvasSnapshot();
+    await this.#sendCanvasSnapshot();
     await this.#persist();
     return keyPackages.length;
   }

@@ -65,6 +65,9 @@ export async function mlsRoutes(app) {
       return reply.code(400).send({ error: "ciphersuite and keyPackages required" });
     }
     if (items.length > 100) return reply.code(400).send({ error: "max 100 key packages per upload" });
+    if (!items.every((kp) => typeof kp?.ref === "string" && typeof kp?.keyPackage === "string")) {
+      return reply.code(400).send({ error: "each key package needs ref and keyPackage" });
+    }
     const dev = await ownedDevice(req.user.id, deviceId);
     if (!dev) return reply.code(404).send({ error: "no such device" });
 
@@ -166,12 +169,38 @@ export async function mlsRoutes(app) {
     const dev = await ownedDevice(req.user.id, senderDeviceId);
     if (!dev) return reply.code(400).send({ error: "unknown sender device" });
 
+    const adds = Array.isArray(welcomes) ? welcomes : [];
+    if (adds.length && kind !== "commit") {
+      return reply.code(400).send({ error: "welcomes only ride along with a commit" });
+    }
+
+    // Retention applies to application traffic only. A commit or proposal
+    // that expired would vanish from the replay while compaction still
+    // assumes it is there, and a member replaying epochs could never catch up.
     const ttl = Number(retentionDays);
-    const expires = Number.isFinite(ttl) && ttl > 0 ? new Date(Date.now() + ttl * 864e5) : null;
+    const expires = kind === "application" && Number.isFinite(ttl) && ttl > 0
+      ? new Date(Date.now() + ttl * 864e5) : null;
 
     try {
       return await tx(async (c) => {
         let writeEpoch = Number(g.epoch);
+
+        // A Welcome grants channel membership (below), so it must be backed
+        // by a KeyPackage that was actually claimed from the target device.
+        // Without this, any member could pull an arbitrary user into the
+        // channel just by naming one of their device ids.
+        for (const w of adds) {
+          const ok = typeof w?.ref === "string" && typeof w?.welcome === "string" && w.deviceId
+            ? await c.query(
+                `SELECT 1 FROM mls_key_packages
+                  WHERE ref=$1 AND device_id::text=$2 AND claimed_at IS NOT NULL`,
+                [unb64(w.ref), String(w.deviceId)])
+            : { rowCount: 0 };
+          if (!ok.rowCount) {
+            throw Object.assign(new Error("welcome does not match a claimed key package for that device"),
+              { statusCode: 400 });
+          }
+        }
 
         if (kind === "commit") {
           if (!Number.isInteger(epoch)) {
@@ -201,7 +230,11 @@ export async function mlsRoutes(app) {
         // a member could hold group keys yet be unable to fetch the very
         // messages they can decrypt. So the add commit also materialises
         // channel membership for the welcomed device's owner.
-        for (const w of Array.isArray(welcomes) ? welcomes : []) {
+        //
+        // The joiner's delivery cursor is seeded at the add commit too. Until
+        // it reports one itself it would otherwise be invisible to compaction,
+        // which could prune messages it has not yet had a chance to fetch.
+        for (const w of adds) {
           await c.query(
             `INSERT INTO mls_welcomes(group_id, key_package_ref, target_device_id, payload, ratchet_tree, joined_at_seq)
              VALUES ($1,$2,$3,$4,$5,$6)`,
@@ -212,6 +245,10 @@ export async function mlsRoutes(app) {
              SELECT $1, d.user_id, 'member' FROM devices d WHERE d.id = $2
              ON CONFLICT (channel_id, user_id) DO NOTHING`,
             [g.channel_id, w.deviceId]);
+          await c.query(
+            `INSERT INTO mls_device_cursors(group_id, device_id, last_seq)
+             VALUES ($1,$2,$3) ON CONFLICT (group_id, device_id) DO NOTHING`,
+            [g.group_id, w.deviceId, seq]);
         }
         return { seq, epoch: writeEpoch };
       });
@@ -227,8 +264,12 @@ export async function mlsRoutes(app) {
   app.get("/api/mls/groups/:groupId/messages", { preHandler: requireSession }, async (req, reply) => {
     const g = await groupMembership(req.user.id, req.params.groupId);
     if (!g) return reply.code(404).send({ error: "no such group" });
-    const since = Number(req.query?.since ?? 0);
-    const limit = Math.min(Number(req.query?.limit ?? 200), 500);
+    // Malformed paging input falls back to defaults rather than reaching
+    // Postgres as NaN and surfacing as a 500.
+    const sinceRaw = Number(req.query?.since ?? 0);
+    const since = Number.isFinite(sinceRaw) && sinceRaw > 0 ? Math.floor(sinceRaw) : 0;
+    const limitRaw = Number(req.query?.limit ?? 200);
+    const limit = Number.isFinite(limitRaw) && limitRaw >= 1 ? Math.min(Math.floor(limitRaw), 500) : 200;
 
     const { rows } = await q(
       `SELECT seq, epoch, kind, sender_device_id, payload, created_at
@@ -236,7 +277,7 @@ export async function mlsRoutes(app) {
         WHERE group_id=$1 AND seq > $2
           AND (expires_at IS NULL OR expires_at > now())
         ORDER BY seq LIMIT $3`,
-      [g.group_id, Number.isFinite(since) ? since : 0, limit]);
+      [g.group_id, since, limit]);
 
     // A cursor at or below the watermark means messages were compacted away
     // before this device applied them. They cannot be re-sent — MLS decrypts

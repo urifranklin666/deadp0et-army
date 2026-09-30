@@ -91,7 +91,8 @@ export async function authRoutes(app) {
     if (!v.verified) return reply.code(400).send({ error: "attestation failed" });
 
     const { credential } = v.registrationInfo;
-    await tx(async (c) => {
+    // The handle was free at /start, but two registrations can race for it.
+    const created = await tx(async (c) => {
       await c.query("INSERT INTO users(id, handle) VALUES ($1,$2)", [userId, pending.handle]);
       await c.query(
         `INSERT INTO webauthn_credentials(user_id, credential_id, public_key, counter, transports)
@@ -99,7 +100,9 @@ export async function authRoutes(app) {
         [userId, Buffer.from(credential.id), Buffer.from(credential.publicKey),
          credential.counter ?? 0, credential.transports ?? null]
       );
-    });
+      return true;
+    }).catch((e) => { if (e.code === "23505") return false; throw e; });
+    if (!created) return reply.code(409).send({ error: "handle taken" });
     await createSession(reply, userId);
     return { ok: true, userId, handle: pending.handle };
   });
@@ -129,6 +132,7 @@ export async function authRoutes(app) {
     const pending = takeChallenge(`auth:${challenge}`);
     if (!pending) return reply.code(400).send({ error: "challenge expired" });
 
+    if (typeof response?.id !== "string") return reply.code(400).send({ error: "malformed assertion" });
     const idBuf = Buffer.from(response.id, "base64url");
     const { rows } = await q(
       `SELECT c.*, u.handle FROM webauthn_credentials c

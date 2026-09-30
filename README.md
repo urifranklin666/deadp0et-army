@@ -65,6 +65,22 @@ reported cursor. Commits are never pruned. Devices silent past 30 days stop
 pinning the log, and a `compaction_watermark` lets the read path answer
 `gap: true` rather than let a returning device diverge in silence.
 
+**A Welcome is a grant, so it is checked.** Being welcomed materialises
+channel membership, so the server only accepts a Welcome naming a KeyPackage
+that was actually claimed from the target device. It also seeds that device's
+delivery cursor at the add commit, so compaction cannot prune past a joiner
+who has not come online yet.
+
+**KeyPackages are a pool.** Each is single-use, so every device keeps a few
+published (topped up when it runs low) and opens a Welcome with the private
+half matching the ref it was addressed to. One package would mean one group.
+
+**Group state is touched by one operation at a time.** Encrypting and applying
+both read the ratchet, await, and write it back; a sync landing mid-send could
+otherwise roll one of them back. A sender also never advances its read cursor
+to its own new message — that would skip whatever others posted in between,
+which can never be fetched again.
+
 **Presence is deliberately outside MLS.** Cursors move at pointer rates;
 routing them through application messages would outrun receivers' skipped-key
 window and grow the ordered log without bound. They are sealed instead under a
@@ -98,12 +114,15 @@ it, so passkeys cannot be exercised from `localhost` against a production
 ## Tests
 
 Backend suites drive the real HTTP API; browser suites drive a real Chromium
-against the live origin with a CDP virtual WebAuthn authenticator.
+against the live origin with a CDP virtual WebAuthn authenticator. The session
+suite needs no browser: it seeds sessions in Postgres and runs `session.js`
+in Node over an in-memory IndexedDB.
 
 ```bash
 node apps/api/test/e2ee.test.js         # PQXDH handshake + relay
 node apps/api/test/mls.api.test.js      # delivery service + fork guard
 node apps/api/test/compaction.test.js   # prune safety
+node apps/web/test/session.test.mjs     # client MLS bookkeeping, against the local api
 node apps/web/test/e2e.mjs              # passkey → channel → message → reload
 node apps/web/test/canvas.mjs           # CRDT convergence, late-joiner snapshot
 node apps/web/test/presence.mjs         # live cursors, log stays untouched
