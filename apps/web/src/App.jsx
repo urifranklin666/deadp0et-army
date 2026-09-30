@@ -11,6 +11,7 @@ import { belongsTo, store } from "./lib/db.js";
 import { GroupSession, SUITE, ensureDevice, withReauth } from "./lib/session.js";
 import { Hints } from "./lib/hints.js";
 import { claimTab } from "./lib/tablock.js";
+import { notify, notificationsOn, setNotifications } from "./lib/notifications.js";
 
 const SYNC_MS = 2500;
 // While the hint socket is up, the api tells us when to fetch; polling only
@@ -36,6 +37,9 @@ function App() {
   const [unread, setUnread] = useState(() => new Set());   // groupIds with news we haven't opened
   const activeRef = useRef(null);
   activeRef.current = active;
+  const channelsRef = useRef([]);
+  channelsRef.current = channels;
+  const [notifyOn, setNotifyOn] = useState(() => notificationsOn());
   const [modal, setModal] = useState(null);
 
   const bump = useCallback(() => setTick((t) => t + 1), []);
@@ -148,6 +152,9 @@ function App() {
     h.on((hint) => {
       if (hint.t !== "log" || hint.g === activeRef.current?.groupId) return;
       setUnread((u) => (u.has(hint.g) ? u : new Set(u).add(hint.g)));
+      // Not decrypted yet (it isn't the open channel), so all we can say is where.
+      const ch = channelsRef.current.find((c) => c.groupId === hint.g);
+      if (ch) notify(`ch:${ch.id}`, "DEADP0ET.ARMY", `New activity in #${ch.slug}`);
     });
     return () => { h.close(); if (hints.current === h) hints.current = null; };
   }, [phase]);
@@ -238,7 +245,17 @@ function App() {
           bump();
           return;
         }
-        if (applied) bump();
+        if (applied) {
+          bump();
+          // New messages from others, while the tab is in the background:
+          // who and where, never what.
+          const fresh = active.history.slice(-applied).filter((m) => m.text !== undefined && !m.mine);
+          const last = fresh[fresh.length - 1];
+          if (last) {
+            notify(`ch:${active.channel.id}`, `#${active.channel.slug}`,
+              `${fresh.length > 1 ? `${fresh.length} new messages` : "New message"} from ${last.unverified ? "an unverified member" : last.from || "someone"}`);
+          }
+        }
       } catch (e) {
         if (!dead) setErr(e.message);
       } finally {
@@ -356,7 +373,7 @@ function App() {
             </div>
           ) : null}
           {active ? (
-            <Conversation session={active} onError={setErr} onChange={bump} openModal={setModal}
+            <Conversation key={active.channel.id} session={active} onError={setErr} onChange={bump} openModal={setModal}
               onBack={() => setActive(null)} />
           ) : <EmptyState />}
         </main>
@@ -444,6 +461,10 @@ function App() {
           choices={[
             { label: "Passkeys…", onPick: () => { setModal({ kind: "passkeys" }); return false; } },
             { label: "Sessions…", onPick: () => { setModal({ kind: "sessions" }); return false; } },
+            {
+              label: notifyOn ? "Turn off desktop notifications" : "Turn on desktop notifications",
+              onPick: async () => { setNotifyOn(await setNotifications(!notifyOn)); },
+            },
             { label: "Sign out", primary: true, onPick: async () => { await api.logout(); location.reload(); } },
             { label: "Sign out everywhere", onPick: async () => { await api.logoutAll(); location.reload(); } },
             { label: "Delete account…", onPick: () => { setModal({ kind: "delete" }); return false; } },
