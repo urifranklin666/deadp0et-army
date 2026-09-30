@@ -2,7 +2,7 @@ import { q, tx } from "../db.js";
 import { requireSession } from "./auth.js";
 import { revokeAccess } from "../membership.js";
 import { hintGroup, hintWelcome, invalidateMembers } from "./notify.js";
-import { decodeMlsMessage } from "ts-mls";
+import { verifiedKeyPackage } from "../keypackages.js";
 
 const b64 = (buf) => Buffer.from(buf).toString("base64");
 const unb64 = (s) => Buffer.from(String(s), "base64");
@@ -32,27 +32,8 @@ async function groupMembership(userId, groupIdB64) {
   return rows[0] ?? null;
 }
 
-/**
- * What a serialized KeyPackage claims: its basic-credential identity and its
- * leaf's signature key. Null if it isn't a KeyPackage.
- */
-export function parseKeyPackage(bytes) {
-  try {
-    const dec = decodeMlsMessage(new Uint8Array(bytes), 0);
-    const msg = Array.isArray(dec) ? dec[0] : dec;
-    if (msg?.wireformat !== "mls_key_package") return null;
-    const leaf = msg.keyPackage.leafNode;
-    return {
-      identity: leaf.credential.credentialType === "basic" ? Buffer.from(leaf.credential.identity).toString("utf8") : null,
-      signatureKey: Buffer.from(leaf.signaturePublicKey),
-    };
-  } catch {
-    return null;
-  }
-}
-
 /** Record that `userId` owns this signature key (see migration 009). */
-async function registerSignatureKey(c, signatureKey, userId) {
+export async function registerSignatureKey(c, signatureKey, userId) {
   await c.query(
     "INSERT INTO mls_signature_keys(signature_key, user_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
     [signatureKey, userId]);
@@ -120,8 +101,11 @@ export async function mlsRoutes(app) {
     // as this device's name, and its owner wrote it. Only accept packages
     // that name their uploader, so nobody can publish themselves as someone
     // else. (KeyPackages are public material; reading one costs no privacy.)
-    const parsed = items.map((kp) => parseKeyPackage(unb64(kp.keyPackage)));
-    if (parsed.some((p) => p?.identity !== req.user.handle)) {
+    // Signed by its own leaf key (proof the uploader holds it) and naming
+    // the uploader: the only packages that may enter the directory.
+    const parsed = await Promise.all(items.map((kp) => verifiedKeyPackage(unb64(kp.keyPackage))));
+    if (parsed.some((p) => !p)) return reply.code(400).send({ error: "invalid key package signature" });
+    if (parsed.some((p) => p.identity !== req.user.handle)) {
       return reply.code(400).send({ error: "key package credential must name the uploading user" });
     }
 
@@ -155,8 +139,9 @@ export async function mlsRoutes(app) {
    * messages still need attributing. Same identity rule as uploads.
    */
   app.post("/api/mls/signature-keys", { preHandler: requireSession }, async (req, reply) => {
-    const p = parseKeyPackage(unb64(req.body?.keyPackage ?? ""));
-    if (!p || p.identity !== req.user.handle) {
+    const p = await verifiedKeyPackage(unb64(req.body?.keyPackage ?? ""));
+    if (!p) return reply.code(400).send({ error: "invalid key package signature" });
+    if (p.identity !== req.user.handle) {
       return reply.code(400).send({ error: "key package credential must name the uploading user" });
     }
     await tx((c) => registerSignatureKey(c, p.signatureKey, req.user.id));
@@ -178,6 +163,34 @@ export async function mlsRoutes(app) {
          FROM mls_signature_keys k JOIN users u ON u.id = k.user_id
         WHERE k.signature_key = ANY($1::bytea[])`, [keys.map(unb64)]);
     return { identities: Object.fromEntries(rows.map((r) => [b64(r.signature_key), r.handle])) };
+  });
+
+  /**
+   * This device found itself removed from the group's encryption (it applied
+   * a commit that took its leaf). Only its own device can say so. Owner and
+   * admin clients re-add such devices while the roster still lists them.
+   */
+  app.post("/api/mls/groups/:groupId/evicted", { preHandler: requireSession }, async (req, reply) => {
+    const g = await groupMembership(req.user.id, req.params.groupId);
+    if (!g) return reply.code(404).send({ error: "no such group" });
+    const dev = await ownedDevice(req.user.id, req.body?.deviceId);
+    if (!dev) return reply.code(400).send({ error: "unknown device" });
+    await q(
+      `INSERT INTO mls_group_devices(group_id, device_id, evicted_at) VALUES ($1,$2,now())
+       ON CONFLICT (group_id, device_id) DO UPDATE SET evicted_at = now()`, [g.group_id, dev]);
+    return { ok: true };
+  });
+
+  /** Members of this channel with a device that reported itself evicted. */
+  app.get("/api/mls/groups/:groupId/evicted", { preHandler: requireSession }, async (req, reply) => {
+    const g = await groupMembership(req.user.id, req.params.groupId);
+    if (!g) return reply.code(404).send({ error: "no such group" });
+    const { rows } = await q(
+      `SELECT DISTINCT u.handle FROM mls_group_devices gd
+         JOIN devices d ON d.id = gd.device_id JOIN users u ON u.id = d.user_id
+         JOIN channel_members m ON m.user_id = u.id AND m.channel_id = $2
+        WHERE gd.group_id = $1 AND gd.evicted_at IS NOT NULL`, [g.group_id, g.channel_id]);
+    return { handles: rows.map((r) => r.handle) };
   });
 
   // Claim one unclaimed KeyPackage per device belonging to `handle`.
@@ -215,7 +228,8 @@ export async function mlsRoutes(app) {
       const g = await groupMembership(req.user.id, req.query.group);
       if (!g) return reply.code(404).send({ error: "no such group" });
       const { rows: inGroup } = await q(
-        "SELECT device_id FROM mls_group_devices WHERE group_id=$1", [g.group_id]);
+        // Evicted devices hold no leaf any more: they're claimable again.
+        "SELECT device_id FROM mls_group_devices WHERE group_id=$1 AND evicted_at IS NULL", [g.group_id]);
       const skip = new Set(inGroup.map((r) => r.device_id));
       devs = allDevs.filter((d) => !skip.has(d.id));
       if (!devs.length) {
@@ -434,7 +448,7 @@ export async function mlsRoutes(app) {
             [g.group_id, w.deviceId, seq]);
           await c.query(
             `INSERT INTO mls_group_devices(group_id, device_id) VALUES ($1,$2)
-             ON CONFLICT DO NOTHING`, [g.group_id, w.deviceId]);
+             ON CONFLICT (group_id, device_id) DO UPDATE SET evicted_at = NULL`, [g.group_id, w.deviceId]);
         }
         return { seq, epoch: writeEpoch };
       });

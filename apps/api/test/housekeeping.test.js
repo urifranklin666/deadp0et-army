@@ -105,6 +105,14 @@ const cred = async () => (await q(
   [keyed.id, crypto.randomBytes(16), crypto.randomBytes(32)])).rows[0].id;
 const k1 = await cred();
 const k2 = await cred();
+// Passkey changes need a fresh passkey proof in this session, not just the
+// cookie: without one, the server asks for it.
+const noStepUp = await api(keyed, "POST", `/api/auth/passkeys/${k1}/remove`, {});
+assert.equal(noStepUp.status, 403);
+assert.equal(noStepUp.json.error, "reauth_required", "a bare session cookie can't change passkeys");
+const stepUp = (user) => q("UPDATE sessions SET reauthed_at = now() WHERE user_id=$1", [user.id]);
+await stepUp(keyed);
+await stepUp(alice);
 assert.equal((await api(keyed, "GET", "/api/auth/passkeys")).json.passkeys.length, 2);
 assert.equal((await api(alice, "POST", `/api/auth/passkeys/${k1}/remove`, {})).status, 404,
   "nobody removes someone else's passkey");
@@ -120,6 +128,11 @@ const heir = await seedUser("hk_heir");
 const shared = (await api(quitter, "POST", "/api/channels", { slug: "hk-shared-" + crypto.randomBytes(3).toString("hex") })).json;
 const solo = (await api(quitter, "POST", "/api/channels", { slug: "hk-solo-" + crypto.randomBytes(3).toString("hex") })).json;
 await q("INSERT INTO channel_members(channel_id, user_id) VALUES ($1,$2)", [shared.id, heir.id]);
+assert.equal((await api(quitter, "POST", "/api/auth/delete", {})).json.error, "reauth_required",
+  "deleting an account needs a fresh passkey proof");
+await q("UPDATE sessions SET reauthed_at = now() - interval '10 minutes' WHERE user_id=$1", [quitter.id]);
+assert.equal((await api(quitter, "POST", "/api/auth/delete", {})).status, 403, "a stale proof doesn't count");
+await q("UPDATE sessions SET reauthed_at = now() WHERE user_id=$1", [quitter.id]);
 assert.equal((await api(quitter, "POST", "/api/auth/delete", {})).status, 200);
 assert.equal((await q("SELECT 1 FROM users WHERE id=$1", [quitter.id])).rowCount, 0, "the account is gone");
 assert.equal((await q("SELECT role FROM channel_members WHERE channel_id=$1 AND user_id=$2",
@@ -277,6 +290,20 @@ const status = (await api(bob, "GET", `/api/mls/devices/${bDev}/key-packages`)).
 assert.equal(status.stale.length, 3, "day-old unwelcomed claims should be reported stale");
 assert.ok(status.stale.every((r) => kps.some((k) => k.ref === r)));
 console.log("· stale claims reported to the owning device");
+
+// A KeyPackage's signatures must verify under its own leaf key — proof the
+// uploader holds that key. A tampered package is refused, so nobody can
+// register someone else's public key as theirs.
+const genuine = await (await MlsClient.create("hk_bob")).newKeyPackage();
+const tampered = new Uint8Array(genuine.encoded);
+tampered[tampered.length - 5] ^= 0xff;
+const bad = await api(bob, "POST", "/api/mls/key-packages", {
+  deviceId: bDev, ciphersuite: "hk", keyPackages: [{ ref: b64(genuine.ref), keyPackage: b64(tampered) }] });
+assert.equal(bad.status, 400);
+assert.match(bad.json.error, /signature/, "a package whose signature doesn't verify is refused");
+assert.equal((await api(bob, "POST", "/api/mls/signature-keys", { keyPackage: b64(tampered) })).status, 400,
+  "the directory takes no key without proof of possession");
+console.log("· key packages must prove possession of their signing key");
 
 // A KeyPackage must name its uploader: nobody publishes themselves as bob.
 const posing = await (await MlsClient.create("hk_bob")).newKeyPackage();

@@ -44,6 +44,9 @@ export const api = {
     call("POST", "/api/mls/key-packages", { deviceId, ciphersuite, keyPackages }),
   registerSignatureKey: (keyPackage) => call("POST", "/api/mls/signature-keys", { keyPackage }),
   identities: (keys) => call("POST", "/api/mls/identities", { keys }),
+  reportEvicted: (groupId, deviceId) =>
+    call("POST", `/api/mls/groups/${encodeURIComponent(groupId)}/evicted`, { deviceId }),
+  evicted: (groupId) => call("GET", `/api/mls/groups/${encodeURIComponent(groupId)}/evicted`),
   keyPackageStatus: (deviceId) => call("GET", `/api/mls/devices/${deviceId}/key-packages`),
   claimKeyPackages: (handle, ciphersuite, groupId) =>
     call("GET", `/api/mls/key-packages/${encodeURIComponent(handle)}?ciphersuite=${encodeURIComponent(ciphersuite)}`

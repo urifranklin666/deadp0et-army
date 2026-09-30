@@ -3,11 +3,12 @@ import { TRUST_PROXY, migrationFiles } from "./config.js";
 import cookie from "@fastify/cookie";
 import rateLimit from "@fastify/rate-limit";
 import websocket from "@fastify/websocket";
-import { pool, q } from "./db.js";
+import { pool, q, tx } from "./db.js";
 import { authRoutes, requireSession } from "./routes/auth.js";
 import { keyRoutes } from "./routes/keys.js";
 import { messageRoutes } from "./routes/messages.js";
-import { mlsRoutes, parseKeyPackage } from "./routes/mls.js";
+import { mlsRoutes, registerSignatureKey } from "./routes/mls.js";
+import { verifiedKeyPackage } from "./keypackages.js";
 import { liveRoutes } from "./routes/live.js";
 import { notifyRoutes } from "./routes/notify.js";
 import { compactAll } from "./compaction.js";
@@ -132,24 +133,28 @@ pendingMigrations()
   .catch(() => {});
 
 // One-time backfill for migration 009: packages uploaded before the
-// signature-key directory existed. Parsing needs JS, so it can't be SQL.
+// signature-key directory existed. Parsing and signature checks need JS, so
+// it can't live in the SQL migration; completion is recorded alongside the
+// migrations so it runs once.
 backfillSignatureKeys()
-  .then((n) => { if (n) app.log.info({ n }, "backfilled signature keys"); })
+  .then((n) => { if (n !== null) app.log.info({ n }, "backfilled signature keys"); })
   .catch((err) => app.log.warn({ err }, "signature key backfill failed"));
 
 async function backfillSignatureKeys() {
-  // Every stored package (a few per device): ON CONFLICT makes repeats free,
-  // and a user with some keys registered may still have older leaves that
-  // aren't.
+  const MARK = "backfill:009_signature_keys";
+  if ((await q("SELECT 1 FROM schema_migrations WHERE name=$1", [MARK])).rowCount) return null;
   const { rows } = await q(
     "SELECT kp.key_package, d.user_id FROM mls_key_packages kp JOIN devices d ON d.id = kp.device_id");
   let n = 0;
-  for (const r of rows) {
-    const p = parseKeyPackage(r.key_package);
-    if (!p) continue;
-    n += (await q("INSERT INTO mls_signature_keys(signature_key, user_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
-      [p.signatureKey, r.user_id])).rowCount;
-  }
+  await tx(async (c) => {
+    for (const r of rows) {
+      const p = await verifiedKeyPackage(r.key_package);
+      if (!p) continue;
+      await registerSignatureKey(c, p.signatureKey, r.user_id);
+      n++;
+    }
+    await c.query("INSERT INTO schema_migrations(name) VALUES ($1) ON CONFLICT DO NOTHING", [MARK]);
+  });
   return n;
 }
 

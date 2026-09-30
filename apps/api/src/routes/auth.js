@@ -26,6 +26,56 @@ async function createSession(reply, userId) {
 }
 
 
+const REAUTH_WINDOW = "5 minutes";
+
+/**
+ * preHandler for sensitive operations: the session must have re-proved one
+ * of the account's passkeys within REAUTH_WINDOW. 403 with a machine-readable
+ * reason, so the client knows to run the step-up ceremony and retry.
+ */
+export async function requireRecentAuth(req, reply) {
+  const { rows } = await q(
+    "SELECT 1 FROM sessions WHERE token_hash=$1 AND reauthed_at > now() - $2::interval",
+    [sha256(req.cookies?.dp_session ?? ""), REAUTH_WINDOW]);
+  if (!rows.length) return reply.code(403).send({ error: "reauth_required" });
+}
+
+/**
+ * Check a WebAuthn assertion against a stored credential (optionally one of
+ * `userId`'s), enforce the counter, and record the use. Returns { cred } or
+ * { status, error }.
+ */
+async function verifyAssertion(response, expectedChallenge, userId) {
+  if (typeof response?.id !== "string") return { status: 400, error: "malformed assertion" };
+  const { rows } = await q(
+    `SELECT c.*, u.handle FROM webauthn_credentials c
+       JOIN users u ON u.id=c.user_id
+      WHERE c.credential_id=$1 AND ($2::uuid IS NULL OR c.user_id = $2)`,
+    [Buffer.from(response.id, "base64url"), userId ?? null]);
+  if (!rows.length) return { status: 401, error: "unknown credential" };
+  const cred = rows[0];
+  const v = await verifyAuthenticationResponse({
+    response,
+    expectedChallenge,
+    expectedOrigin: RP_ORIGIN,
+    expectedRPID: RP_ID,
+    credential: {
+      id: Buffer.from(cred.credential_id).toString("base64url"),
+      publicKey: new Uint8Array(cred.public_key),
+      counter: Number(cred.counter),
+      transports: cred.transports ?? undefined,
+    },
+  }).catch(() => ({ verified: false }));
+  if (!v.verified) return { status: 401, error: "assertion failed" };
+  // A counter that fails to advance is the documented clone signal.
+  const newCounter = v.authenticationInfo.newCounter;
+  if (Number(cred.counter) > 0 && newCounter <= Number(cred.counter)) {
+    return { status: 401, error: "authenticator counter regressed" };
+  }
+  await q("UPDATE webauthn_credentials SET counter=$1, last_used_at=now() WHERE id=$2", [newCounter, cred.id]);
+  return { cred };
+}
+
 /** Fastify preHandler: attaches req.user or 401s. */
 export async function requireSession(req, reply) {
   const user = await sessionUser(req.cookies?.dp_session);
@@ -86,6 +136,10 @@ export async function authRoutes(app) {
     const { credential } = v.registrationInfo;
     // The handle was free at /start, but two registrations can race for it.
     const created = await tx(async (c) => {
+      // Re-checked here: the handle may have been retired since /start
+      // (its owner deleted the account while this challenge was pending).
+      const retired = await c.query("SELECT 1 FROM retired_handles WHERE handle=$1", [pending.handle]);
+      if (retired.rowCount) return false;
       await c.query("INSERT INTO users(id, handle) VALUES ($1,$2)", [userId, pending.handle]);
       await c.query(
         `INSERT INTO webauthn_credentials(user_id, credential_id, public_key, counter, transports)
@@ -126,38 +180,50 @@ export async function authRoutes(app) {
     const { response, challenge } = req.body || {};
     const pending = await takeChallenge(`auth:${challenge}`);
     if (!pending) return reply.code(400).send({ error: "challenge expired" });
+    const r = await verifyAssertion(response, pending.challenge);
+    if (r.error) return reply.code(r.status).send({ error: r.error });
+    await createSession(reply, r.cred.user_id);
+    return { ok: true, handle: r.cred.handle };
+  });
 
-    if (typeof response?.id !== "string") return reply.code(400).send({ error: "malformed assertion" });
-    const idBuf = Buffer.from(response.id, "base64url");
+  // --- step-up: re-prove the passkey inside an existing session ---
+  //
+  // A session cookie is bearer authority for 30 days. The operations that
+  // would turn a stolen one into a permanent takeover or an irreversible loss
+  // — adding or removing a passkey, deleting the account — also need a fresh
+  // assertion from one of the account's own passkeys (see requireRecentAuth).
+
+  // Whether this session's passkey proof is still fresh, so a client can
+  // decide to prompt before trying, rather than provoke a 403.
+  app.get("/api/auth/reauth", { preHandler: requireSession }, async (req) => {
     const { rows } = await q(
-      `SELECT c.*, u.handle FROM webauthn_credentials c
-         JOIN users u ON u.id=c.user_id WHERE c.credential_id=$1`, [idBuf]);
-    if (!rows.length) return reply.code(401).send({ error: "unknown credential" });
-    const cred = rows[0];
+      "SELECT 1 FROM sessions WHERE token_hash=$1 AND reauthed_at > now() - $2::interval",
+      [sha256(req.cookies.dp_session), REAUTH_WINDOW]);
+    return { recent: rows.length > 0 };
+  });
 
-    const v = await verifyAuthenticationResponse({
-      response,
-      expectedChallenge: pending.challenge,
-      expectedOrigin: RP_ORIGIN,
-      expectedRPID: RP_ID,
-      credential: {
-        id: Buffer.from(cred.credential_id).toString("base64url"),
-        publicKey: new Uint8Array(cred.public_key),
-        counter: Number(cred.counter),
-        transports: cred.transports ?? undefined,
-      },
-    }).catch(() => ({ verified: false }));
-    if (!v.verified) return reply.code(401).send({ error: "assertion failed" });
+  app.post("/api/auth/reauth/start", { preHandler: requireSession, ...ceremonyLimit }, async (req) => {
+    const { rows } = await q(
+      "SELECT credential_id, transports FROM webauthn_credentials WHERE user_id=$1", [req.user.id]);
+    const options = await generateAuthenticationOptions({
+      rpID: RP_ID,
+      userVerification: "preferred",
+      allowCredentials: rows.map((r) => ({
+        id: Buffer.from(r.credential_id).toString("base64url"),
+        transports: r.transports ?? undefined,
+      })),
+    });
+    await putChallenge(`reauth:${req.user.id}`, { challenge: options.challenge });
+    return { options };
+  });
 
-    // A counter that fails to advance is the documented clone signal.
-    const newCounter = v.authenticationInfo.newCounter;
-    if (Number(cred.counter) > 0 && newCounter <= Number(cred.counter)) {
-      return reply.code(401).send({ error: "authenticator counter regressed" });
-    }
-    await q("UPDATE webauthn_credentials SET counter=$1, last_used_at=now() WHERE id=$2",
-      [newCounter, cred.id]);
-    await createSession(reply, cred.user_id);
-    return { ok: true, handle: cred.handle };
+  app.post("/api/auth/reauth/finish", { preHandler: requireSession }, async (req, reply) => {
+    const pending = await takeChallenge(`reauth:${req.user.id}`);
+    if (!pending) return reply.code(400).send({ error: "challenge expired" });
+    const r = await verifyAssertion(req.body?.response, pending.challenge, req.user.id);
+    if (r.error) return reply.code(r.status).send({ error: r.error });
+    await q("UPDATE sessions SET reauthed_at = now() WHERE token_hash = $1", [sha256(req.cookies.dp_session)]);
+    return { ok: true };
   });
 
   app.post("/api/auth/logout", async (req, reply) => {
@@ -189,7 +255,7 @@ export async function authRoutes(app) {
     return { passkeys: rows };
   });
 
-  app.post("/api/auth/passkeys/start", { preHandler: requireSession, ...ceremonyLimit }, async (req) => {
+  app.post("/api/auth/passkeys/start", { preHandler: [requireSession, requireRecentAuth], ...ceremonyLimit }, async (req) => {
     const { rows } = await q(
       "SELECT credential_id, transports FROM webauthn_credentials WHERE user_id=$1", [req.user.id]);
     const options = await generateRegistrationOptions({
@@ -209,7 +275,7 @@ export async function authRoutes(app) {
     return { options };
   });
 
-  app.post("/api/auth/passkeys/finish", { preHandler: requireSession }, async (req, reply) => {
+  app.post("/api/auth/passkeys/finish", { preHandler: [requireSession, requireRecentAuth] }, async (req, reply) => {
     const pending = await takeChallenge(`add:${req.user.id}`);
     if (!pending) return reply.code(400).send({ error: "challenge expired" });
     const v = await verifyRegistrationResponse({
@@ -229,7 +295,7 @@ export async function authRoutes(app) {
     return { ok: true, id: added.rows[0].id };
   });
 
-  app.post("/api/auth/passkeys/:id/remove", { preHandler: requireSession }, async (req, reply) => {
+  app.post("/api/auth/passkeys/:id/remove", { preHandler: [requireSession, requireRecentAuth] }, async (req, reply) => {
     // Never the last one: that would lock the account out for good.
     const out = await tx(async (c) => {
       const { rows } = await c.query(
@@ -252,7 +318,7 @@ export async function authRoutes(app) {
    * members' clients prune the account's leftover MLS leaves when they
    * reconcile against the roster.
    */
-  app.post("/api/auth/delete", { preHandler: requireSession }, async (req, reply) => {
+  app.post("/api/auth/delete", { preHandler: [requireSession, requireRecentAuth] }, async (req, reply) => {
     await tx(async (c) => {
       const { rows: owned } = await c.query(
         "SELECT channel_id FROM channel_members WHERE user_id=$1 AND role='owner'", [req.user.id]);

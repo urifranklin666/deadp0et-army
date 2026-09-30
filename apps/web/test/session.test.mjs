@@ -24,11 +24,19 @@ const sha256 = (s) => crypto.createHash("sha256").update(s).digest();
 
 // session.js calls fetch with relative paths and relies on the browser's
 // cookie jar. Stand in for both; `as()` picks whose cookie rides along.
+// Each simulated user also gets their own address, as real users would —
+// otherwise they'd all share 127.0.0.1's per-address rate-limit budget.
 let cookie = null;
+let addr = "10.200.0.1";
+const addrs = new Map();
 const realFetch = globalThis.fetch;
 globalThis.fetch = (path, init = {}) =>
-  realFetch(BASE + path, { ...init, headers: { ...(init.headers || {}), cookie } });
-const as = (user) => { cookie = user.cookie; };
+  realFetch(BASE + path, { ...init, headers: { ...(init.headers || {}), cookie, "x-forwarded-for": addr } });
+const as = (user) => {
+  cookie = user.cookie;
+  if (!addrs.has(user.handle)) addrs.set(user.handle, `10.200.${addrs.size + 1}.1`);
+  addr = addrs.get(user.handle);
+};
 
 const { GroupSession, ensureDevice, topUpKeyPackages } = await import("../src/lib/session.js");
 const { api } = await import("../src/lib/api.js");
@@ -514,6 +522,51 @@ as(alice); await A.send("after the heal");
 as(carol); await drain(Cs);
 assert.ok(texts(Cs).includes("after the heal"), "carol reads again after being healed back in");
 console.log("· an undeclared removal is audited by the remover's key and healed by the owner");
+
+// ------------------------------------------- attribution survives outages
+
+// If the key directory can't be reached, messages must not be branded
+// "unverified" for good: they wait, and the next sync resolves them.
+{
+  // A sender bob has never resolved (a cached key would never hit the outage).
+  as(alice); await A.invite(dave.handle);
+  as(dave);
+  const Ds = new GroupSession(dave.handle, dDev, A.channel);
+  Ds.groupId = A.groupId;
+  assert.equal(await Ds.tryJoin(), true);
+  await Ds.send("while the directory is down");
+  as(bob);
+  const realIdentities = api.identities;
+  let asked = 0;
+  api.identities = async () => { asked++; throw new TypeError("offline"); };
+  await drain(B);
+  api.identities = realIdentities;
+  assert.ok(asked > 0, "the lookup was attempted (and failed)");
+  const e = B.history.find((h) => h.text === "while the directory is down");
+  assert.ok(e && !e.unverified && e.pendingKey, "a failed lookup leaves the message pending, not unverified");
+  await drain(B);
+  const e2 = B.history.find((h) => h.text === "while the directory is down");
+  assert.equal(e2.from, dave.handle, "the next sync resolves it");
+  assert.ok(!e2.pendingKey && !e2.unverified);
+}
+console.log("· a directory outage delays attribution instead of marking messages unverified");
+
+// ---------------------------------------- legacy leaves get registered
+
+// A group from before the key directory: the founder's leaf was never
+// uploaded, so nothing registered its key. Reopening registers it, with proof.
+{
+  as(alice);
+  const leafKey = A.client.members().find((m) => m.identity === alice.handle);
+  await q("DELETE FROM mls_signature_keys WHERE user_id=$1", [alice.id]);
+  await store.del(K.leafRegistered(alice.handle, A.groupId));
+  const reopened = new GroupSession(alice.handle, aDev, A.channel);
+  await reopened.open(A.groupId);
+  await settle(); await settle();
+  const { rows } = await q("SELECT count(*)::int AS n FROM mls_signature_keys WHERE user_id=$1", [alice.id]);
+  assert.ok(leafKey && rows[0].n >= 1, "reopening should register this device's leaf key");
+}
+console.log("· reopening a group registers a legacy leaf's key, with proof");
 
 // ------------------------------------ attribution by key, not credential
 

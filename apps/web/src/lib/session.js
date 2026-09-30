@@ -41,21 +41,56 @@ export async function login(handle) {
  * it. Keys never change owner, so a hit is good for the page's lifetime.
  */
 const keyOwners = new Map();
+// Keys the directory didn't know, and when we asked: not re-sent on every
+// sync (they're multi-KB), but asked again after a while — an owner may
+// register a leaf later (see #registerLeaf).
+const unknownKeys = new Map();
+const UNKNOWN_TTL_MS = 60_000;
 
+/** Resolve keys to owners. Throws if the directory can't be reached. */
 async function ownersOf(keys) {
-  const unknown = [...new Set(keys)].filter((k) => k && !keyOwners.has(k));
-  if (unknown.length) {
-    const { identities } = await api.identities(unknown);
-    for (const k of unknown) if (identities[k]) keyOwners.set(k, identities[k]);
+  const now = Date.now();
+  const ask = [...new Set(keys)].filter((k) => k && !keyOwners.has(k)
+    && !(now - (unknownKeys.get(k) ?? -Infinity) < UNKNOWN_TTL_MS));
+  if (ask.length) {
+    const { identities } = await api.identities(ask);
+    for (const k of ask) {
+      if (identities[k]) { keyOwners.set(k, identities[k]); unknownKeys.delete(k); }
+      else unknownKeys.set(k, now);
+    }
   }
   return keyOwners;
 }
 
+/**
+ * Run `fn`; if the server wants a fresh passkey proof first (it does for
+ * passkey changes and account deletion), do the step-up ceremony and retry
+ * once. Within the server's window, later sensitive calls don't prompt again.
+ */
+export async function withReauth(fn) {
+  const stepUp = async () => {
+    const { options } = await api.post("/api/auth/reauth/start", {});
+    const assertion = await startAuthentication({ optionsJSON: options });
+    await api.post("/api/auth/reauth/finish", { response: assertion });
+  };
+  if (!(await api.get("/api/auth/reauth").catch(() => ({ recent: false }))).recent) await stepUp();
+  try {
+    return await fn();
+  } catch (e) {
+    // The proof lapsed between the check and the call: once more.
+    if (e.status !== 403 || e.message !== "reauth_required") throw e;
+    await stepUp();
+    return fn();
+  }
+}
+
 /** Register another passkey for the signed-in account (a backup). */
-export async function addPasskey() {
-  const { options } = await api.post("/api/auth/passkeys/start", {});
-  const attResp = await startRegistration({ optionsJSON: options });
-  return api.post("/api/auth/passkeys/finish", { response: attResp });
+export function addPasskey() {
+  return withReauth(async () => {
+    const { options } = await api.post("/api/auth/passkeys/start", {});
+    const attResp = await startRegistration({ optionsJSON: options });
+    return api.post("/api/auth/passkeys/finish", { response: attResp });
+  });
 }
 
 /**
@@ -305,6 +340,7 @@ export class GroupSession {
         throw e;
       }
       await this.#restoreDoc();
+      this.#registerLeaf().catch(() => {});
       return true;
     }
 
@@ -413,7 +449,8 @@ export class GroupSession {
     }
     let applied = 0;
     const landedCommits = [];
-    const toAttribute = [];
+    // Entries whose attribution failed earlier get another go with this batch.
+    const toAttribute = this.history.filter((h) => h.pendingKey).map((h) => [h, h.pendingKey]);
     for (const m of messages) {
       if (m.senderDeviceId === this.deviceId) {
         // Our own entry. Its effect is already in local state — encrypt()
@@ -428,14 +465,17 @@ export class GroupSession {
         const { text, sender, senderKey, removed } = await this.client.applyWithSender(unb64(m.payload));
         if (!this.client.active) {
           // That commit removed THIS device from the group's encryption. It
-          // can't read anything further, so stop here and forget the group;
-          // if the roster still lists us (an undeclared removal), an owner's
-          // client re-adds us and the Welcome is joined afresh.
+          // can't read anything further, so stop here and forget the group.
+          // Tell the server: if the roster still lists us (an undeclared
+          // removal), owner/admin clients re-add exactly this device, and the
+          // Welcome is joined afresh. Name the remover by key, not credential.
           this.cursor = m.seq;
+          await api.reportEvicted(this.groupId, this.deviceId).catch(() => {});
+          const by = senderKey ? (await ownersOf([senderKey]).catch(() => keyOwners)).get(senderKey) : null;
           await this.#forget();
           this.history.push({
             seq: m.seq, at: m.createdAt,
-            notice: `${sender || "Someone"} removed this device from the group's encryption.`,
+            notice: `${by || "An unverified member"} removed this device from the group's encryption.`,
           });
           return { applied, removed: true };
         }
@@ -476,7 +516,7 @@ export class GroupSession {
       this.cursor = m.seq;
     }
     if (toAttribute.length) await this.#attribute(toAttribute);
-    if (messages.length) {
+    if (messages.length || toAttribute.length) {
       // Our own sends are recorded the moment they post, but may carry a
       // higher seq than peers' messages this sync just fetched. Keep the
       // transcript in log order (Array#sort is stable, so equal seqs keep
@@ -546,10 +586,20 @@ export class GroupSession {
    * key's owner is shown, flagged, next to the real owner.
    */
   async #attribute(pairs) {
-    const owners = await ownersOf(pairs.map(([, k]) => k)).catch(() => keyOwners);
+    let owners;
+    try {
+      owners = await ownersOf(pairs.map(([, k]) => k));
+    } catch {
+      // Directory unreachable: don't brand these "unverified" for good. Keep
+      // the key on the entry and try again on a later sync.
+      for (const [entry, key] of pairs) entry.pendingKey = key;
+      return;
+    }
     for (const [entry, key] of pairs) {
+      delete entry.pendingKey;
       const owner = owners.get(key);
       if (!owner) { entry.unverified = true; continue; }
+      delete entry.unverified;
       if (entry.from && entry.from !== owner) entry.claimed = entry.from;
       entry.from = owner;
     }
@@ -624,6 +674,19 @@ export class GroupSession {
     await this.#persist();
     await store.del(pendingKey);
     return res;
+  }
+
+  /**
+   * Make sure the key directory knows this device's leaf in this group, with
+   * proof we hold it. New leaves are registered when their package is
+   * uploaded; this covers older groups (e.g. founders' never-uploaded leaves),
+   * whose messages would otherwise show as unverified. Once per group.
+   */
+  async #registerLeaf() {
+    const flag = K.leafRegistered(this.handle, this.groupId);
+    if (!this.client?.active || (await store.get(flag))) return;
+    await api.registerSignatureKey(b64(await this.client.leafKeyProof()));
+    await store.set(flag, true);
   }
 
   /** Put the group back to `state` in memory and on disk. */
@@ -701,6 +764,9 @@ export class GroupSession {
     if (!force && Date.now() - (this.lastReconcile || 0) < RECONCILE_MS) return 0;
     this.lastReconcile = Date.now();
     await this.#drain();
+    // The drain may have removed THIS device (a commit took our leaf, or the
+    // server says we're out). Nothing below makes sense from here.
+    if (!this.client || this.removed) return 0;
     const { members } = await api.members(this.channel.id);
     const roster = new Set(members.map((m) => m.handle));
     const inTree = new Set(this.members());
@@ -719,6 +785,15 @@ export class GroupSession {
     // with no devices or packages right now is retried next time.
     for (const handle of roster) {
       if (handle === this.handle || inTree.has(handle)) continue;
+      changed += await this.#invite(handle).catch(() => 0);
+    }
+
+    // Devices that reported being removed from the group's encryption while
+    // their owner still has a leaf elsewhere (one of several devices, or our
+    // own other device): the scoped claim picks up exactly those devices.
+    const { handles: evicted } = await api.evicted(this.groupId).catch(() => ({ handles: [] }));
+    for (const handle of evicted) {
+      if (!roster.has(handle) || !this.members().includes(handle)) continue;
       changed += await this.#invite(handle).catch(() => 0);
     }
     return changed;

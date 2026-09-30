@@ -98,13 +98,15 @@ await alice.page.getByRole("button", { name: "Passkeys…" }).click();
 await alice.page.getByText("Passkey 1").waitFor({ timeout: 15000 });
 assert.ok(await alice.page.getByRole("button", { name: "Remove passkey 1" }).isDisabled(),
   "the only passkey can't be removed");
+// Adding one first re-proves an existing passkey (the step-up), so the old
+// authenticator stays plugged in until the new passkey exists.
 const backup = await alice.cdp.send("WebAuthn.addVirtualAuthenticator", {
   options: { protocol: "ctap2", transport: "usb", hasResidentKey: true, hasUserVerification: true,
     isUserVerified: true, automaticPresenceSimulation: true },
 });
-await alice.cdp.send("WebAuthn.removeVirtualAuthenticator", { authenticatorId: alice.authenticatorId });
 await alice.page.getByRole("button", { name: "Add a passkey" }).click();
 await alice.page.getByText("Passkey 2").waitFor({ timeout: 30000 });
+await alice.cdp.send("WebAuthn.removeVirtualAuthenticator", { authenticatorId: alice.authenticatorId });
 await alice.page.keyboard.press("Escape");
 await alice.page.getByRole("button", { name: "Account" }).click();
 await alice.page.getByRole("button", { name: "Sign out", exact: true }).click();

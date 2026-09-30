@@ -94,6 +94,11 @@ Leaving works the other way round. A member cannot commit its own removal, so
 the next owner/admin client to reconcile the MLS tree against the channel
 roster commits the removal of the leftover leaf.
 
+**Passkey changes need a fresh passkey.** A session cookie lasts 30 days, so
+adding or removing a passkey, or deleting the account, also requires an
+assertion from one of the account's passkeys within the last five minutes:
+a stolen session alone can't lock the owner out or destroy the account.
+
 **Deleting an account retires its handle.** Channels it owns pass to the
 longest-standing admin (else member); ones with nobody else in them are
 deleted; the browser wipes every key it held for the handle. Handles are how
@@ -103,8 +108,11 @@ members recognise each other, so a deleted one can never be registered again.
 credential is a name its owner wrote, and a modified client can put anyone's
 name there. What it can't fake is the key that signs its messages, which MLS
 verifies. So the server keeps a directory of signature keys, each recorded
-from an authenticated upload whose credential had to name the uploader, and
-clients name every message's sender by looking up its signing key. A
+from an authenticated upload of a KeyPackage whose signatures verify under
+that key (proof the uploader holds it) and whose credential names the
+uploader, and clients name every message's sender by looking up its signing
+key. Devices register their own leaf the same way when they open a group, so
+leaves that were never uploaded (older groups' founders) get covered too. A
 credential that disagrees is shown as a false claim next to the real owner;
 a key nobody registered is shown as unverified. (Inviters also refuse
 KeyPackages that don't name who they meant to invite.) The directory is the

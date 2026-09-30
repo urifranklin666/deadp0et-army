@@ -41,25 +41,6 @@ importers:
       '@fastify/websocket':
         specifier: ^11.0.1
         version: 11.3.0
-      '@simplewebauthn/server':
-        specifier: ^13.3.2
-        version: 13.3.2
-      dotenv:
-        specifier: ^16.4.7
-        version: 16.6.1
-      fastify:
-        specifier: ^5.12.5
-        version: 5.12.5
-      ioredis:
-        specifier: ^5.4.2
-        version: 5.11.1(supports-color@7.2.0)
-      pg:
-        specifier: ^8.13.1
-        version: 8.22.0
-      ts-mls:
-        specifier: ^1.6.4
-        version: 1.6.4(@hpke/chacha20poly1305@1.8.0)(@hpke/ml-kem@0.3.0)(@noble/ciphers@2.2.0)(@noble/curves@2.2.0)(@noble/post-quantum@0.6.1)
-    devDependencies:
       '@hpke/chacha20poly1305':
         specifier: ^1.8.0
         version: 1.8.0
@@ -84,6 +65,25 @@ importers:
       '@noble/post-quantum':
         specifier: ^0.6.1
         version: 0.6.1
+      '@simplewebauthn/server':
+        specifier: ^13.3.2
+        version: 13.3.2
+      dotenv:
+        specifier: ^16.4.7
+        version: 16.6.1
+      fastify:
+        specifier: ^5.12.5
+        version: 5.12.5
+      ioredis:
+        specifier: ^5.4.2
+        version: 5.11.1(supports-color@7.2.0)
+      pg:
+        specifier: ^8.13.1
+        version: 8.22.0
+      ts-mls:
+        specifier: ^1.6.4
+        version: 1.6.4(@hpke/chacha20poly1305@1.8.0)(@hpke/ml-kem@0.3.0)(@noble/ciphers@2.2.0)(@noble/curves@2.2.0)(@noble/post-quantum@0.6.1)
+    devDependencies:
       '@signalapp/libsignal-client':
         specifier: ^0.99.1
         version: 0.99.1

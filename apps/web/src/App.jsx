@@ -7,7 +7,7 @@ import { ChoiceModal, ConfirmModal, PromptModal } from "./Modal.jsx";
 import { Banner } from "./ui.jsx";
 import { api } from "./lib/api.js";
 import { belongsTo, store } from "./lib/db.js";
-import { GroupSession, SUITE, ensureDevice } from "./lib/session.js";
+import { GroupSession, SUITE, ensureDevice, withReauth } from "./lib/session.js";
 import { Hints } from "./lib/hints.js";
 import { claimTab } from "./lib/tablock.js";
 
@@ -458,7 +458,7 @@ function App() {
           validate={(v) => (v && v !== handle ? `Type ${handle} exactly.` : null)}
           onSubmit={async (v) => {
             if (v !== handle) throw new Error(`Type ${handle} to confirm.`);
-            await api.deleteAccount();
+            await withReauth(() => api.deleteAccount());
             await store.deleteWhere(belongsTo(handle));
             location.reload();
           }}

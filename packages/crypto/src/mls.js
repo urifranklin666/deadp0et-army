@@ -21,7 +21,7 @@ import "@noble/post-quantum/ml-dsa.js";
 
 import {
   getCiphersuiteFromName, nobleCryptoProvider,
-  generateKeyPackage, createGroup, createCommit, joinGroup,
+  generateKeyPackage, generateKeyPackageWithKey, createGroup, createCommit, joinGroup,
   createApplicationMessage, processPrivateMessage,
   encodeMlsMessage, decodeMlsMessage,
   encodeGroupState, decodeGroupState, mlsExporter,
@@ -182,6 +182,21 @@ export class MlsClient {
       commit: encodeMlsMessage(res.commit),
       welcome: res.welcome ? encodeMlsMessage({ version: MLS_VERSION, wireformat: "mls_welcome", welcome: res.welcome }) : null,
     };
+  }
+
+  /**
+   * A KeyPackage signed with THIS member's current leaf signature key: proof,
+   * for the server's key directory, that we hold it. Used to register leaves
+   * that were never uploaded as packages (older groups' founders).
+   */
+  async leafKeyProof() {
+    const own = this.#state.privatePath.leafIndex;
+    const leaf = this.#state.ratchetTree[own * 2]?.leaf;
+    const kp = await generateKeyPackageWithKey(
+      { credentialType: "basic", identity: utf8.encode(this.identity) },
+      defaultCapabilities(), defaultLifetime, [],
+      { signKey: this.#state.signaturePrivateKey, publicKey: leaf.signaturePublicKey }, this.#cs);
+    return encodeMlsMessage({ version: MLS_VERSION, wireformat: "mls_key_package", keyPackage: kp.publicPackage });
   }
 
   /** Every occupied leaf in the current epoch, with its credential identity. */
