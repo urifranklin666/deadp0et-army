@@ -13,9 +13,16 @@ CREATE TABLE IF NOT EXISTS mls_group_devices (
   PRIMARY KEY (group_id, device_id)
 );
 
--- Backfill from what the server already knew: welcomes and delivery cursors.
+-- Backfill from what the server already knew: welcomes and delivery cursors
+-- — but only for devices whose owner is still a member of the channel.
+-- Someone welcomed and later removed would otherwise read as "already in the
+-- group", and could never be invited back.
 INSERT INTO mls_group_devices(group_id, device_id)
-  SELECT group_id, target_device_id FROM mls_welcomes
-  UNION
-  SELECT group_id, device_id FROM mls_device_cursors
+  SELECT s.group_id, s.device_id
+    FROM (SELECT group_id, target_device_id AS device_id FROM mls_welcomes
+          UNION
+          SELECT group_id, device_id FROM mls_device_cursors) s
+    JOIN devices d ON d.id = s.device_id
+    JOIN mls_groups g ON g.group_id = s.group_id
+    JOIN channel_members m ON m.channel_id = g.channel_id AND m.user_id = d.user_id
 ON CONFLICT DO NOTHING;

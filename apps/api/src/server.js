@@ -1,7 +1,5 @@
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import Fastify from "fastify";
+import { TRUST_PROXY, migrationFiles } from "./config.js";
 import cookie from "@fastify/cookie";
 import rateLimit from "@fastify/rate-limit";
 import websocket from "@fastify/websocket";
@@ -18,8 +16,8 @@ import { challengeBackend, closeChallenges } from "./challenges.js";
 
 const app = Fastify({
   logger: { level: process.env.LOG_LEVEL || "info" },
-  // nginx is the only thing in front of us and it sets these.
-  trustProxy: true,
+  // Believe X-Forwarded-For only from our own proxies (see config.js).
+  trustProxy: TRUST_PROXY,
   bodyLimit: 1024 * 1024, // 1 MiB — envelopes are small; canvas state has its own cap
 });
 
@@ -42,9 +40,7 @@ app.addHook("onSend", async (req, reply, payload) => {
 // Migrations on disk that the database hasn't applied. A deploy that forgot
 // `pnpm migrate` would otherwise fail later, on whichever query first needs
 // a new column; this makes it visible at the health check instead.
-const MIGRATIONS = fs.readdirSync(
-  path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../migrations"))
-  .filter((f) => f.endsWith(".sql")).sort();
+const MIGRATIONS = migrationFiles().map((m) => m.name);
 
 async function pendingMigrations() {
   const { rows } = await q("SELECT name FROM schema_migrations");

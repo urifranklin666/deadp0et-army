@@ -1,7 +1,7 @@
 import { q, tx } from "../db.js";
 import { requireSession } from "./auth.js";
 import { revokeAccess } from "../membership.js";
-import { hintGroup, hintWelcome } from "./notify.js";
+import { hintGroup, hintWelcome, invalidateMembers } from "./notify.js";
 import { decodeMlsMessage } from "ts-mls";
 
 const b64 = (buf) => Buffer.from(buf).toString("base64");
@@ -396,6 +396,7 @@ export async function mlsRoutes(app) {
         return { seq, epoch: writeEpoch };
       });
       // Only after the commit is durable. Best effort: clients also poll.
+      if (adds.length || revoked.length) invalidateMembers(g.group_id);
       hintGroup(g.group_id, out.seq, revoked).catch(() => {});
       hintWelcome(adds.map((w) => String(w.deviceId))).catch(() => {});
       return out;

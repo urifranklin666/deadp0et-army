@@ -71,6 +71,18 @@ if (!process.env.AUTH_RATE_LIMIT) {
   }
   assert.equal(refused, 2, "passkey ceremonies past 10/min per address should be refused");
   console.log("· passkey ceremonies rate-limited per address");
+
+  // A client can write anything at the LEFT of X-Forwarded-For; only the
+  // entry our proxy appended (right-most) may pick the bucket. Varying the
+  // spoofed part must not buy fresh budget.
+  let spoofRefused = 0;
+  for (let i = 0; i < 12; i++) {
+    const r = await api({ headers: { "x-forwarded-for": `203.0.113.${i}, 10.97.0.2` } },
+      "POST", "/api/auth/login/start", { handle: "nobody" });
+    if (r.status === 429) spoofRefused++;
+  }
+  assert.equal(spoofRefused, 2, "a spoofed left-most X-Forwarded-For must not change the rate-limit bucket");
+  console.log("· rate limits key on the proxy-supplied address, not a spoofed one");
 }
 
 // ------------------------------------------------------ sign out everywhere

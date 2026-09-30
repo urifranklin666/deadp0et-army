@@ -1,5 +1,5 @@
-import crypto from "node:crypto";
 import { q } from "../db.js";
+import { RECHECK_MS, RP_ORIGIN, sha256 } from "../config.js";
 
 /**
  * Ephemeral presence relay.
@@ -18,11 +18,6 @@ const rooms = new Map();          // groupId(b64) -> Set<socket>
 const MAX_FRAME = 4096;           // a cursor packet is ~60 bytes
 const MAX_PER_SEC = 40;           // generous for 20Hz, cheap to enforce
 const MAX_SOCKETS_PER_USER = 4;   // per group: a few tabs, not a fan-out amplifier
-// Same default as WebAuthn's in auth.js: never "unset means anything goes".
-const RP_ORIGIN = process.env.RP_ORIGIN || "http://localhost";
-const RECHECK_MS = Number(process.env.PRESENCE_RECHECK_MS) || 60_000;  // max time a revoked session keeps listening
-
-const sha256 = (s) => crypto.createHash("sha256").update(s).digest();
 
 /** Sockets `userId` already holds in this group. */
 function held(groupId, userId) {

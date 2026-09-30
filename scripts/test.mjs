@@ -53,7 +53,9 @@ const env = {
   LOG_LEVEL: process.env.LOG_LEVEL || "warn",
   // Suites fire hundreds of requests a minute from one address.
   RATE_LIMIT_MAX: "100000",
-  AUTH_RATE_LIMIT: "100000",
+  // The browser suites register many users from one address; the api suites
+  // keep the real limit so housekeeping can check it.
+  ...(browser ? { AUTH_RATE_LIMIT: "100000" } : {}),
   PRESENCE_RECHECK_MS: "300",
 };
 

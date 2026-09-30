@@ -387,11 +387,14 @@ export class GroupSession {
       return { applied: 0, recovered: true };
     }
     let applied = 0;
+    const landedCommits = [];
     for (const m of messages) {
       if (m.senderDeviceId === this.deviceId) {
         // Our own entry. Its effect is already in local state — encrypt()
         // and addMembers() advance the ratchet as they build — and MLS gives
-        // a sender no way to decrypt what it sent. Just step past it.
+        // a sender no way to decrypt what it sent. Just step past it. If it
+        // is the commit a pending note is waiting on, it landed: settle it.
+        if (m.kind === "commit") landedCommits.push(m.epoch);
         this.cursor = m.seq;
         continue;
       }
@@ -431,6 +434,11 @@ export class GroupSession {
       // their arrival order).
       this.history.sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
       await this.#persist();
+      if (landedCommits.length) {
+        const key = K.pendingCommit(this.handle, this.groupId);
+        const pending = await store.get(key);
+        if (pending && landedCommits.includes(pending.epoch)) await store.del(key);
+      }
       // Tell the server how far we've applied. This is the sole input to
       // compaction — without it the log can never be pruned, because the
       // server has no other way to know a message is safely delivered.
@@ -470,8 +478,7 @@ export class GroupSession {
    * False if the whole log has no commit at that epoch; null if it could not
    * be read far enough to say.
    */
-  async #ownCommitLanded(epoch) {
-    let since = this.cursor;
+  async #ownCommitLanded(epoch, since = this.cursor) {
     for (let page = 0; page < 20; page++) {
       const { messages } = await api.messages(this.groupId, since);
       const commit = messages.find((m) => m.kind === "commit" && m.epoch === epoch);
@@ -527,7 +534,9 @@ export class GroupSession {
     const pendingKey = K.pendingCommit(this.handle, this.groupId);
     await store.setMany([
       [K.groupState(this.handle, this.groupId), this.client.exportState()],
-      [pendingKey, { before, epoch: res.builtAtEpoch }],
+      // `since`: the cursor now. The commit lands after it, so settling can
+      // search from here even if this tab syncs past it in the meantime.
+      [pendingKey, { before, epoch: res.builtAtEpoch, since: this.cursor }],
     ]);
     try {
       await api.postMessage(this.groupId, {
@@ -568,7 +577,7 @@ export class GroupSession {
     const key = K.pendingCommit(this.handle, this.groupId);
     const pending = await store.get(key);
     if (!pending) return;
-    const landed = await this.#ownCommitLanded(pending.epoch).catch(() => null);
+    const landed = await this.#ownCommitLanded(pending.epoch, pending.since ?? 0).catch(() => null);
     if (landed === null) throw new Error("couldn't confirm an unfinished change to this group; try again");
     if (!landed) await this.#restoreState(pending.before);
     await store.del(key);

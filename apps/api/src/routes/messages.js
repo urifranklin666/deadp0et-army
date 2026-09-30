@@ -1,6 +1,7 @@
 import { q, tx } from "../db.js";
 import { requireSession } from "./auth.js";
 import { revokeAccess } from "../membership.js";
+import { invalidateMembers } from "./notify.js";
 
 const b64 = (buf) => Buffer.from(buf).toString("base64");
 const unb64 = (s) => Buffer.from(String(s), "base64");
@@ -63,6 +64,7 @@ export async function messageRoutes(app) {
     });
     if (out === 404) return reply.code(404).send({ error: "not a member" });
     if (out === 409) return reply.code(409).send({ error: "the owner cannot leave their own channel" });
+    invalidateMembers();   // leaving is rare; forget every cached roster
     return { ok: true };
   });
 

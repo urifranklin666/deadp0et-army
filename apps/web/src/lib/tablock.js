@@ -7,11 +7,20 @@
  * diverge for good. An exclusive Web Lock, held for the tab's lifetime,
  * makes the second tab stand down instead.
  *
- * Resolves true if this tab now holds the lock, false if another tab does.
+ * Resolves true if this tab holds the lock, false if another tab does.
  * Browsers without Web Locks get true: no worse than before.
  */
+const held = new Map();          // handle -> Promise<boolean>, once per tab
+
 export function claimTab(handle) {
   if (!navigator.locks?.request) return Promise.resolve(true);
+  // Asking again from this tab (boot retried after a failure) must not find
+  // its own lock and conclude another tab has it.
+  if (!held.has(handle)) held.set(handle, request(handle));
+  return held.get(handle);
+}
+
+function request(handle) {
   return new Promise((resolve) => {
     navigator.locks.request(`deadp0et:keys:${handle}`, { ifAvailable: true }, (lock) => {
       if (!lock) { resolve(false); return undefined; }

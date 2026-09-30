@@ -382,6 +382,37 @@ assert.ok(texts(B3).includes("still in step after a crash mid-commit"));
 assert.equal(errors(B3).length, 0);
 console.log("· a crash mid-commit resumes in the right epoch instead of forking");
 
+// The outcome can't be checked right away (response lost AND the log read
+// fails), so the pending note stays — and then the tab keeps syncing past
+// its own commit before reloading. The note must not roll back a commit
+// that landed.
+as(alice);
+const lostPost = api.postMessage;
+const lostRead = api.messages;
+let failNextRead = false;
+api.postMessage = async (gid, body) => {
+  const r = await lostPost(gid, body);
+  if (body.kind === "commit") { failNextRead = true; throw new TypeError("connection reset"); }
+  return r;
+};
+api.messages = async (...a) => {
+  if (failNextRead) { failNextRead = false; throw new TypeError("offline"); }
+  return lostRead(...a);
+};
+const dave2 = dave;   // any user with devices not in this room
+await assert.rejects(again.invite(dave2.handle), /connection reset/);
+api.postMessage = lostPost;
+api.messages = lostRead;
+assert.ok(await store.get(K.pendingCommit(alice.handle, again.groupId)), "the undetermined commit leaves a note");
+await again.sync();                                    // steps over its own commit...
+assert.equal(await store.get(K.pendingCommit(alice.handle, again.groupId)), undefined,
+  "...which settles the note: it landed");
+const afterSync = new GroupSession(alice.handle, aDev, again.channel);
+await afterSync.open(again.groupId);
+assert.equal(afterSync.epoch, (await api.group(again.groupId)).epoch,
+  "reloading after syncing past a landed commit keeps the new epoch");
+console.log("· an unsettled commit note is settled by syncing past it, never rolled back wrongly");
+
 await settle();                                     // let fire-and-forget cursor reports land
 await q("DELETE FROM users WHERE handle = ANY($1)", [["sess_alice", "sess_bob", "sess_carol", "sess_dave", "sess_mallory"]]);
 await pool.end();

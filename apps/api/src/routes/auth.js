@@ -6,11 +6,9 @@ import {
 import { q, tx } from "../db.js";
 import { putChallenge, takeChallenge } from "../challenges.js";
 
-const RP_ID = process.env.RP_ID || "localhost";
-const RP_ORIGIN = process.env.RP_ORIGIN || "http://localhost";
+import { RP_ID, RP_ORIGIN, sha256 } from "../config.js";
 const SESSION_TTL_DAYS = 30;
 
-const sha256 = (s) => crypto.createHash("sha256").update(s).digest();
 
 async function createSession(reply, userId) {
   const token = crypto.randomBytes(32).toString("base64url");
@@ -23,18 +21,23 @@ async function createSession(reply, userId) {
   });
 }
 
-/** Fastify preHandler: attaches req.user or 401s. */
-export async function requireSession(req, reply) {
-  const token = req.cookies?.dp_session;
-  if (!token) return reply.code(401).send({ error: "unauthenticated" });
+/** The live session behind a cookie value: { id, handle }, or null. */
+export async function sessionUser(token) {
+  if (!token) return null;
   const { rows } = await q(
     `SELECT u.id, u.handle FROM sessions s
        JOIN users u ON u.id = s.user_id
       WHERE s.token_hash = $1 AND s.expires_at > now()`,
     [sha256(token)]
   );
-  if (!rows.length) return reply.code(401).send({ error: "unauthenticated" });
-  req.user = rows[0];
+  return rows[0] ?? null;
+}
+
+/** Fastify preHandler: attaches req.user or 401s. */
+export async function requireSession(req, reply) {
+  const user = await sessionUser(req.cookies?.dp_session);
+  if (!user) return reply.code(401).send({ error: "unauthenticated" });
+  req.user = user;
 }
 
 // Starting a passkey ceremony is cheap to ask for and creates state (a

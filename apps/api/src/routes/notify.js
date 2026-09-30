@@ -1,5 +1,6 @@
-import crypto from "node:crypto";
 import { q } from "../db.js";
+import { RECHECK_MS, RP_ORIGIN } from "../config.js";
+import { sessionUser } from "./auth.js";
 
 /**
  * Delivery hints: "group G has something new at seq S".
@@ -18,16 +19,30 @@ import { q } from "../db.js";
 
 const subscribers = new Map();          // userId -> Set<socket>
 const MAX_SOCKETS_PER_USER = 8;         // tabs
-const RP_ORIGIN = process.env.RP_ORIGIN || "http://localhost";
-const RECHECK_MS = Number(process.env.PRESENCE_RECHECK_MS) || 60_000;
 
-const sha256 = (s) => crypto.createHash("sha256").update(s).digest();
+// Who is in a group, briefly cached: every message posted would otherwise
+// cost a membership query. A membership change invalidates it explicitly;
+// the TTL only bounds staleness if something forgets to.
+const MEMBERS_TTL_MS = 5_000;
+const memberCache = new Map();          // groupId(hex) -> { at, ids }
 
-async function sessionUser(token) {
-  if (!token) return null;
+async function groupMembers(groupId) {
+  const key = Buffer.from(groupId).toString("hex");
+  const hit = memberCache.get(key);
+  if (hit && Date.now() - hit.at < MEMBERS_TTL_MS) return hit.ids;
   const { rows } = await q(
-    "SELECT user_id FROM sessions WHERE token_hash=$1 AND expires_at > now()", [sha256(token)]);
-  return rows[0]?.user_id ?? null;
+    `SELECT m.user_id FROM mls_groups g JOIN channel_members m ON m.channel_id = g.channel_id
+      WHERE g.group_id = $1`, [groupId]);
+  const ids = rows.map((r) => r.user_id);
+  memberCache.set(key, { at: Date.now(), ids });
+  if (memberCache.size > 10_000) memberCache.clear();
+  return ids;
+}
+
+/** Call when a group's membership changes (no argument: forget them all). */
+export function invalidateMembers(groupId) {
+  if (groupId === undefined) memberCache.clear();
+  else memberCache.delete(Buffer.from(groupId).toString("hex"));
 }
 
 function send(userIds, hint) {
@@ -46,10 +61,8 @@ function send(userIds, hint) {
  */
 export async function hintGroup(groupId, seq, alsoUserIds = []) {
   if (!subscribers.size) return;
-  const { rows } = await q(
-    `SELECT m.user_id FROM mls_groups g JOIN channel_members m ON m.channel_id = g.channel_id
-      WHERE g.group_id = $1`, [groupId]);
-  send(new Set([...rows.map((r) => r.user_id), ...alsoUserIds]),
+  const members = await groupMembers(groupId);
+  send(new Set([...members, ...alsoUserIds]),
     { t: "log", g: Buffer.from(groupId).toString("base64"), s: seq });
 }
 
@@ -64,36 +77,43 @@ export async function notifyRoutes(app) {
   app.get("/api/live", { websocket: true }, async (socket, req) => {
     // Same reasoning as the presence relay: CORS doesn't cover WebSockets.
     if (req.headers.origin !== RP_ORIGIN) { socket.close(4403, "forbidden"); return; }
+
+    // Listen for close BEFORE awaiting anything: a socket that goes away
+    // during the session check must not be registered afterwards and leak.
+    let gone = false;
+    let drop = () => { gone = true; };
+    socket.on("close", () => drop());
+    socket.on("error", () => drop());
+    socket.on("message", () => {});     // nothing to say to us; ignore rather than error
+
     const token = req.cookies?.dp_session;
-    let userId;
+    let user;
     try {
-      userId = await sessionUser(token);
+      user = await sessionUser(token);
     } catch (err) {
       req.log.warn({ err }, "notify: auth check failed");
       socket.close(1011, "try again");
       return;
     }
-    if (!userId) { socket.close(4401, "unauthenticated"); return; }
+    if (gone) return;
+    if (!user) { socket.close(4401, "unauthenticated"); return; }
 
-    let set = subscribers.get(userId);
+    let set = subscribers.get(user.id);
     if (set && set.size >= MAX_SOCKETS_PER_USER) { socket.close(4429, "too many connections"); return; }
-    if (!set) { set = new Set(); subscribers.set(userId, set); }
+    if (!set) { set = new Set(); subscribers.set(user.id, set); }
     set.add(socket);
 
-    const drop = () => {
-      clearInterval(recheck);
-      set.delete(socket);
-      if (!set.size && subscribers.get(userId) === set) subscribers.delete(userId);
-    };
     // A logged-out session stops getting hints within RECHECK_MS.
     const recheck = setInterval(async () => {
-      const still = await sessionUser(token).catch(() => userId);
+      const still = await sessionUser(token).catch(() => user);
       if (!still) { drop(); socket.close(4401, "unauthenticated"); }
     }, RECHECK_MS);
     recheck.unref();
 
-    socket.on("message", () => {});     // nothing to say to us; ignore rather than error
-    socket.on("close", drop);
-    socket.on("error", drop);
+    drop = () => {
+      clearInterval(recheck);
+      set.delete(socket);
+      if (!set.size && subscribers.get(user.id) === set) subscribers.delete(user.id);
+    };
   });
 }

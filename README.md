@@ -164,6 +164,11 @@ pnpm --filter api start          # :8790
 pnpm --filter web dev            # :5173, proxies /api
 ```
 
+The api trusts `X-Forwarded-For` only from loopback proxies (nginx on the
+same host); set `TRUST_PROXY` (an address or CIDR) if the proxy lives
+elsewhere. Trusting every hop would let clients choose their own rate-limit
+bucket.
+
 Requires Postgres and Redis, and a `.env` at the repo root (never committed):
 
 ```

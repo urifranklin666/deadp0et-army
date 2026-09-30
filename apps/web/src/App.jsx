@@ -161,6 +161,16 @@ function App() {
         const { welcomes } = await api.welcomes(deviceId);
         if (dead || !welcomes.length) return;
 
+        // A Welcome for a group this device already holds state for was
+        // joined, but its ack never landed (the save happens first, then the
+        // ack). Ack it now, or it lingers forever.
+        const done = welcomes.filter((w) =>
+          [...sessions.current.values()].some((s) => s.client && s.groupId === w.groupId));
+        if (done.length) {
+          await api.ackWelcomes(deviceId, done.map((w) => w.id)).catch(() => {});
+          done.forEach((w) => notifiedWelcomes.current.add(w.id));
+        }
+
         // A session already open on a group we've just been welcomed into
         // (the user was looking at it, waiting) joins straight away.
         const joined = new Set();
@@ -199,7 +209,13 @@ function App() {
     if (!active || !active.client) return;
     let dead = false;
     let last = 0;
+    // Coalesce: a burst of hints (someone drawing flushes ~4/s) becomes one
+    // fetch in flight plus at most one more, not a queued GET per hint.
+    let inFlight = false;
+    let again = false;
     const pull = async () => {
+      if (inFlight) { again = true; return; }
+      inFlight = true;
       last = Date.now();
       try {
         const { applied, removed } = await active.sync();
@@ -215,6 +231,9 @@ function App() {
         if (applied) bump();
       } catch (e) {
         if (!dead) setErr(e.message);
+      } finally {
+        inFlight = false;
+        if (again && !dead) { again = false; pull(); }
       }
     };
     pull();
