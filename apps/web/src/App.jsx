@@ -524,12 +524,13 @@ function Members({ session, openModal }) {
   const ref = useRef(null);
 
   useEffect(() => {
+    if (session.removed) return undefined;    // the roster is no longer ours to read
     let dead = false;
     api.members(session.channel.id)
       .then((r) => { if (!dead) setMembers(r.members); })
       .catch(() => { if (!dead) setMembers(null); });
     return () => { dead = true; };
-  }, [session.channel.id, session.epoch]);
+  }, [session.channel.id, session.epoch, session.removed]);
 
   useEffect(() => {
     if (!open) return;
