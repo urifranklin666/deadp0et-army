@@ -59,6 +59,18 @@ const gidBytes = crypto.randomBytes(16);
 const gid = gidBytes.toString("base64");
 await api(alice, "POST", "/api/mls/groups", { channelId: ch.id, groupId: gid, ciphersuite: "test" });
 
+// ------------------------------------------------------ sign out everywhere
+
+const multi = await seedUser("hk_multi");
+const other = "hk-multi-2";
+await q("INSERT INTO sessions(user_id, token_hash, expires_at) VALUES ($1,$2, now() + interval '1 hour')",
+  [multi.id, sha256(other)]);
+const ended = await api(multi, "POST", "/api/auth/logout-all", {});
+assert.equal(ended.json.ended, 2, "both sessions should end");
+assert.equal((await api({ cookie: `dp_session=${other}` }, "GET", "/api/auth/me")).status, 401,
+  "the other device's session must be dead too");
+console.log("· sign-out-everywhere ends every session of the account");
+
 // ----------------------------------------------------------------- health
 
 const health = await (await fetch(`${BASE}/api/health`)).json();
@@ -291,7 +303,7 @@ hb.close(); ho.close();
 console.log("· delivery hints reach members only, and need a session and our origin");
 
 await q("DELETE FROM users WHERE handle = ANY($1)",
-  [["hk_alice", "hk_bob", "hk_expired", "hk_claimant", "hk_outsider", "hk_drainer", "hk_nosy"]]);
+  [["hk_alice", "hk_bob", "hk_expired", "hk_claimant", "hk_outsider", "hk_drainer", "hk_nosy", "hk_multi"]]);
 await pool.end();
 await closeChallenges();
 console.log("\nALL HOUSEKEEPING ASSERTIONS PASSED");

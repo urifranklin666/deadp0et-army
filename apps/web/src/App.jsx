@@ -19,6 +19,16 @@ const BUILD = typeof __BUILD__ === "string" ? __BUILD__ : "dev";  // set by vite
 
 /* ------------------------------------------------------------ primitives */
 
+/** "14:05" today, "Mar 3 14:05" otherwise. */
+function fmtTime(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return d.toDateString() === new Date().toDateString()
+    ? time
+    : `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${time}`;
+}
+
 function Glass({ className = "", children }) {
   const positioned = /(^|\s)(absolute|fixed|sticky)(\s|$)/.test(className);
   return (
@@ -400,7 +410,7 @@ function App() {
           <span className="hidden font-mono text-[10px] text-slate-600 sm:inline">build {BUILD}</span>
           <span className="font-mono text-[11px] text-slate-500">@{handle}</span>
           <button
-            onClick={async () => { await api.logout(); location.reload(); }}
+            onClick={() => setModal({ kind: "signout" })}
             className="rounded-lg border border-white/10 p-1.5 text-slate-400 hover:text-white"
             aria-label="Sign out"
           >
@@ -526,6 +536,16 @@ function App() {
         />
       ) : null}
 
+      {modal?.kind === "signout" ? (
+        <SignOutModal
+          onClose={() => setModal(null)}
+          onSignOut={async (everywhere) => {
+            await (everywhere ? api.logoutAll() : api.logout());
+            location.reload();
+          }}
+        />
+      ) : null}
+
       {modal?.kind === "clear" ? (
         <ConfirmModal
           title="Clear the board"
@@ -536,6 +556,37 @@ function App() {
           onClose={() => setModal(null)}
         />
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * Sign out here, or end every session this account has. Either way this
+ * device keeps its keys: signing back in picks up where it left off.
+ */
+function SignOutModal({ onClose, onSignOut }) {
+  const [busy, setBusy] = useState(null);
+  const go = async (everywhere) => {
+    setBusy(everywhere ? "all" : "one");
+    try { await onSignOut(everywhere); } catch { setBusy(null); }
+  };
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true"
+      aria-labelledby="signout-title" onClick={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+      <Glass className="w-full max-w-sm p-5">
+        <h2 id="signout-title" className="text-sm font-bold text-white">Sign out</h2>
+        <p className="mt-2 text-xs leading-relaxed text-slate-400">
+          This device keeps its keys either way. "Everywhere" also ends every other session on
+          your account — use it if a device is lost.
+        </p>
+        <div className="mt-5 flex flex-col gap-2">
+          <Button busy={busy === "one"} disabled={!!busy} onClick={() => go(false)}>Sign out</Button>
+          <Button variant="ghost" busy={busy === "all"} disabled={!!busy} onClick={() => go(true)}>
+            Sign out everywhere
+          </Button>
+          <button onClick={onClose} disabled={!!busy} className="mt-1 text-xs text-slate-500 hover:text-white">Cancel</button>
+        </div>
+      </Glass>
     </div>
   );
 }
@@ -715,7 +766,10 @@ function Conversation({ session, onError, onChange, openModal }) {
                         <p className="mb-0.5 font-mono text-[10px] font-semibold text-cyan-300/80">{m.from}</p>
                       ) : null}
                       <p className="whitespace-pre-wrap break-words">{m.text}</p>
-                      <p className="mt-1 font-mono text-[9px] text-slate-500">#{m.seq}</p>
+                      <p className="mt-1 font-mono text-[9px] text-slate-500">
+                        {m.at ? <time dateTime={m.at} title={new Date(m.at).toLocaleString()}>{fmtTime(m.at)}</time> : null}
+                        {m.at ? " · " : null}#{m.seq}
+                      </p>
                     </div>
                   </div>
                 )}

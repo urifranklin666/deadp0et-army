@@ -158,5 +158,14 @@ export async function authRoutes(app) {
     return { ok: true };
   });
 
+  // Every session of this user, this one included. Passkeys can't be
+  // "changed" like a password, so this is how a lost or stolen device's
+  // session is cut off.
+  app.post("/api/auth/logout-all", { preHandler: requireSession }, async (req, reply) => {
+    const { rowCount } = await q("DELETE FROM sessions WHERE user_id=$1", [req.user.id]);
+    reply.clearCookie("dp_session", { path: "/" });
+    return { ok: true, ended: rowCount };
+  });
+
   app.get("/api/auth/me", { preHandler: requireSession }, async (req) => ({ user: req.user }));
 }

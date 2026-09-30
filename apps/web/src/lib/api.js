@@ -27,6 +27,7 @@ export const api = {
   health: () => call("GET", "/api/health"),
   me: () => call("GET", "/api/auth/me"),
   logout: () => call("POST", "/api/auth/logout"),
+  logoutAll: () => call("POST", "/api/auth/logout-all"),
 
   channels: () => call("GET", "/api/channels"),
   createChannel: (slug, kind) => call("POST", "/api/channels", { slug, kind }),

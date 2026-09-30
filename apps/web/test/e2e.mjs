@@ -171,6 +171,14 @@ assert.equal(bobAfter, 0, "bob should no longer see the channel");
 console.log("· alice removed bob; bob's console shows it and the channel is gone for him");
 if (process.env.SHOT2) await bob.page.screenshot({ path: process.env.SHOT2 });
 
+if (process.env.SHOT3) await alice.page.screenshot({ path: process.env.SHOT3 });
+
+// Sign out everywhere: alice lands back on the passkey screen.
+await alice.page.getByRole("button", { name: "Sign out" }).click();
+await alice.page.getByRole("button", { name: "Sign out everywhere" }).click();
+await alice.page.getByRole("button", { name: "Create passkey" }).waitFor({ timeout: 30000 });
+console.log("· sign out everywhere returns to the passkey screen");
+
 const allErrors = [...alice.errors, ...bob.errors];
 if (allErrors.length) {
   console.log("\nPAGE ERRORS:\n  " + allErrors.join("\n  "));

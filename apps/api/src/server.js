@@ -111,7 +111,11 @@ const compactTimer = setInterval(() => {
 }, COMPACT_MS);
 compactTimer.unref();
 
-const close = async () => {
+// Idempotent: a second signal (a supervisor retrying, ^C twice) must not run
+// shutdown again — pool.end() throws if called twice.
+let closing = null;
+const close = () => (closing ??= shutdown());
+const shutdown = async () => {
   clearInterval(compactTimer);
   app.log.info("shutting down");
   await app.close();
