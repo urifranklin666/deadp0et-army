@@ -246,6 +246,13 @@ export class GroupSession {
 
   async #sendEnvelope(obj) {
     const ct = await this.client.encrypt(encodeEnvelope(obj));
+    // Save the advanced sending ratchet BEFORE the ciphertext leaves. If the
+    // tab died after posting but before saving, the reloaded state would
+    // derive the same key and nonce for the next message — AES-GCM nonce
+    // reuse. The reverse (saved, never posted) just skips a generation,
+    // which receivers tolerate. Only group state changes here; the receive
+    // side, cursor and transcript are as last persisted.
+    await store.set(K.groupState(this.handle, this.groupId), this.client.exportState());
     const { seq } = await api.postMessage(this.groupId, {
       kind: "application", senderDeviceId: this.deviceId, payload: b64(ct),
     });
@@ -307,8 +314,10 @@ export class GroupSession {
     // decryptable with the keys we were given, by design.
     this.cursor = mine.joinedAtSeq || 0;
     this.history = [];
-    await api.ackWelcomes(this.deviceId, [mine.id]);
+    // Persist before acking: an acked Welcome is never offered again, so a
+    // failed save after the ack would lose the join for good.
     await this.#persist();
+    await api.ackWelcomes(this.deviceId, [mine.id]);
     // The group state now holds everything the join needed; the package's
     // init key has done its job, and keeping it would only weaken forward
     // secrecy. Then replace what the inviter claimed.

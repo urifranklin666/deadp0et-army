@@ -329,6 +329,26 @@ as(bob); await B3.sync();
 assert.ok(texts(B3).includes("third time"));
 console.log("· re-inviting a leaver replaces their stale leaf in the same commit");
 
+// --------------------------------- no key reuse across a crash mid-send
+
+// The post lands but the tab "dies" before send() finishes. Reloading from
+// storage and sending again must not reuse the lost message's key: bob has
+// to be able to read both.
+as(alice);
+const crashPost = api.postMessage;
+api.postMessage = async (gid, body) => { await crashPost(gid, body); throw new TypeError("tab closed"); };
+await assert.rejects(third.A.send("sent just before the crash"), /tab closed/);
+api.postMessage = crashPost;
+const reloaded = new GroupSession(alice.handle, aDev, third.A.channel);
+assert.equal(await reloaded.open(third.A.groupId), true);
+await reloaded.send("sent after reloading");
+as(bob); await B3.sync();
+assert.ok(texts(B3).includes("sent just before the crash"));
+assert.ok(texts(B3).includes("sent after reloading"),
+  "the reloaded device must not reuse the crashed send's key");
+assert.equal(errors(B3).length, 0);
+console.log("· a crash after posting doesn't lead to key reuse on reload");
+
 await settle();                                     // let fire-and-forget cursor reports land
 await q("DELETE FROM users WHERE handle = ANY($1)", [["sess_alice", "sess_bob", "sess_carol", "sess_dave", "sess_mallory"]]);
 await pool.end();
