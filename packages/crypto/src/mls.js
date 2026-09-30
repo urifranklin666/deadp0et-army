@@ -244,24 +244,26 @@ export class MlsClient {
   /**
    * apply(), plus the identity of the member who sent it.
    *
-   * `sender` is the credential identity of the sending leaf. It is
-   * authenticated, not merely claimed: processing verifies the content's
-   * signature against that leaf's key, and would throw otherwise. It is null
-   * for commits/proposals and when the sender can't be resolved.
+   * `sender` is the credential identity of the sending leaf, and
+   * `senderKey` (base64) that leaf's signature key. Processing verifies the
+   * content's signature against that key, so the KEY is authenticated; the
+   * credential is only what the leaf's owner wrote, and can be rewritten by
+   * a modified client. Attribute by the key (see the session's directory
+   * lookup). Both are null for commits/proposals or when unresolvable.
    */
   async applyWithSender(encoded) {
     const msg = decode(encoded);
     if (msg.wireformat !== "mls_private_message") return { text: null, sender: null };
     // Only application messages are attributed; don't pay for the extra
     // sender-data decryption on commits and proposals.
-    const sender = msg.privateMessage.contentType === "application"
+    const who = msg.privateMessage.contentType === "application"
       ? await this.#senderOf(msg.privateMessage).catch(() => null)
       : null;
     const res = await processPrivateMessage(this.#state, msg.privateMessage, emptyPskIndex, this.#cs);
     this.#state = res.newState;
     return res.kind === "applicationMessage"
-      ? { text: fromUtf8(res.message), sender }
-      : { text: null, sender: null };
+      ? { text: fromUtf8(res.message), sender: who?.identity ?? null, senderKey: who?.key ?? null }
+      : { text: null, sender: null, senderKey: null };
   }
 
   /** Resolve a private message's sending leaf to its credential identity. */
@@ -277,7 +279,10 @@ export class MlsClient {
     const node = sd && data.ratchetTree[sd.leafIndex * 2];   // leaf i lives at node 2i
     if (node?.nodeType !== "leaf") return null;
     const cred = node.leaf.credential;
-    return cred.credentialType === "basic" ? fromUtf8(cred.identity) : null;
+    return {
+      identity: cred.credentialType === "basic" ? fromUtf8(cred.identity) : null,
+      key: b64(node.leaf.signaturePublicKey),
+    };
   }
 
   // -------------------------------------------------------------- presence

@@ -99,10 +99,16 @@ longest-standing admin (else member); ones with nobody else in them are
 deleted; the browser wipes every key it held for the handle. Handles are how
 members recognise each other, so a deleted one can never be registered again.
 
-**Messages are attributed by credential.** The sender shown on a message is
-the credential of the MLS leaf that signed it, not anything the server says.
-Since anyone can write any identity into their own KeyPackage, an inviter
-refuses packages whose credential doesn't name the handle being invited.
+**Messages are attributed by signing key, not by credential.** A leaf's
+credential is a name its owner wrote, and a modified client can put anyone's
+name there. What it can't fake is the key that signs its messages, which MLS
+verifies. So the server keeps a directory of signature keys, each recorded
+from an authenticated upload whose credential had to name the uploader, and
+clients name every message's sender by looking up its signing key. A
+credential that disagrees is shown as a false claim next to the real owner;
+a key nobody registered is shown as unverified. (Inviters also refuse
+KeyPackages that don't name who they meant to invite.) The directory is the
+server's word, like the KeyPackages it hands out.
 
 **One tab holds the keys.** Tabs of one browser share IndexedDB, so two
 tabs would each advance their own copy of the same MLS state (same ratchet
@@ -149,19 +155,13 @@ tag, so nginx should send it as a header.
 
 ## Known limits
 
-Both follow from commits being MLS *private* messages (opaque to the server)
-and from members using unsigned "basic" credentials:
-
-- **Removal authorization binds honest clients only.** The server checks the
-  `removes` a commit declares, but cannot see the proposals inside it, so a
-  modified client could commit a removal without declaring it. Closing this
-  means sending handshake messages as MLS public messages (revealing
-  membership changes to the server, which largely knows them already) so the
-  server can validate proposals against roles.
-- **Attribution trusts credentials after the add.** The server only accepts
-  KeyPackages naming their uploader, and inviters re-check that, but a member
-  running a modified client could later commit a leaf update carrying a
-  different name. Closing this needs credentials the server (or users) sign.
+- **Removal authorization binds honest clients only.** Commits are MLS
+  *private* messages, opaque to the server. It checks the `removes` a commit
+  declares, but cannot see the proposals inside, so a modified client could
+  commit a removal without declaring it. Closing this means sending handshake
+  messages as MLS public messages (revealing membership changes to the
+  server, which largely knows them already) so it can check proposals
+  against roles.
 
 ## Development
 

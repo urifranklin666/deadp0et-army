@@ -36,6 +36,21 @@ export async function login(handle) {
   return api.post("/api/auth/login/finish", { response: assertion, challenge: options.challenge });
 }
 
+/**
+ * Signature key (base64) -> the handle whose authenticated upload registered
+ * it. Keys never change owner, so a hit is good for the page's lifetime.
+ */
+const keyOwners = new Map();
+
+async function ownersOf(keys) {
+  const unknown = [...new Set(keys)].filter((k) => k && !keyOwners.has(k));
+  if (unknown.length) {
+    const { identities } = await api.identities(unknown);
+    for (const k of unknown) if (identities[k]) keyOwners.set(k, identities[k]);
+  }
+  return keyOwners;
+}
+
 /** Register another passkey for the signed-in account (a backup). */
 export async function addPasskey() {
   const { options } = await api.post("/api/auth/passkeys/start", {});
@@ -301,7 +316,10 @@ export class GroupSession {
     const raw = crypto.getRandomValues(new Uint8Array(16));
     this.groupId = b64(raw);
     this.client = await MlsClient.create(this.handle);
-    await this.client.newKeyPackage();
+    const leaf = await this.client.newKeyPackage();
+    // Never claimable, but its signature key must be in the directory, or
+    // nobody could attribute this founder's messages.
+    await api.registerSignatureKey(b64(leaf.encoded));
     await this.client.createGroup(raw);
     await api.createGroup(this.channel.id, this.groupId, SUITE, this.deviceId);
     await this.#persist();
@@ -395,6 +413,7 @@ export class GroupSession {
     }
     let applied = 0;
     const landedCommits = [];
+    const toAttribute = [];
     for (const m of messages) {
       if (m.senderDeviceId === this.deviceId) {
         // Our own entry. Its effect is already in local state — encrypt()
@@ -406,7 +425,7 @@ export class GroupSession {
         continue;
       }
       try {
-        const { text, sender } = await this.client.applyWithSender(unb64(m.payload));
+        const { text, sender, senderKey } = await this.client.applyWithSender(unb64(m.payload));
         if (text !== null) {
           const env = decodeEnvelope(text);
           if (env.t === T.Y_UPDATE || env.t === T.Y_SNAPSHOT) {
@@ -418,12 +437,13 @@ export class GroupSession {
             // stagger so a large group doesn't publish N identical snapshots.
             if (m.senderDeviceId !== this.deviceId) this.#answerSnapshotRequest();
           } else {
-            // `from` comes from the MLS credential of the signing leaf, not
-            // from anything the server says about who posted it.
-            this.history.push({
+            // Attributed below, by the key that signed it.
+            const entry = {
               seq: m.seq, text: env.b, at: m.createdAt, from: sender,
               mine: m.senderDeviceId === this.deviceId,
-            });
+            };
+            this.history.push(entry);
+            if (senderKey) toAttribute.push([entry, senderKey]);
           }
         }
         applied++;
@@ -434,6 +454,7 @@ export class GroupSession {
       }
       this.cursor = m.seq;
     }
+    if (toAttribute.length) await this.#attribute(toAttribute);
     if (messages.length) {
       // Our own sends are recorded the moment they post, but may carry a
       // higher seq than peers' messages this sync just fetched. Keep the
@@ -494,6 +515,23 @@ export class GroupSession {
       since = messages[messages.length - 1].seq;
     }
     return null;
+  }
+
+  /**
+   * Name each message by the account that registered its signing key, not by
+   * the credential in the leaf (which the leaf's owner can rewrite). The MLS
+   * signature check already proved which key signed it. A key nobody
+   * registered is shown as unverified; a credential that disagrees with the
+   * key's owner is shown, flagged, next to the real owner.
+   */
+  async #attribute(pairs) {
+    const owners = await ownersOf(pairs.map(([, k]) => k)).catch(() => keyOwners);
+    for (const [entry, key] of pairs) {
+      const owner = owners.get(key);
+      if (!owner) { entry.unverified = true; continue; }
+      if (entry.from && entry.from !== owner) entry.claimed = entry.from;
+      entry.from = owner;
+    }
   }
 
   /** Sync until the server has nothing newer for us. */

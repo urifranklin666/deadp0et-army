@@ -7,7 +7,7 @@ import { pool, q } from "./db.js";
 import { authRoutes, requireSession } from "./routes/auth.js";
 import { keyRoutes } from "./routes/keys.js";
 import { messageRoutes } from "./routes/messages.js";
-import { mlsRoutes } from "./routes/mls.js";
+import { mlsRoutes, parseKeyPackage } from "./routes/mls.js";
 import { liveRoutes } from "./routes/live.js";
 import { notifyRoutes } from "./routes/notify.js";
 import { compactAll } from "./compaction.js";
@@ -130,6 +130,28 @@ for (const key of ["RP_ID", "RP_ORIGIN", "SESSION_SECRET"]) {
 pendingMigrations()
   .then((p) => { if (p.length) app.log.warn({ pending: p }, "database is missing migrations; run `pnpm migrate`"); })
   .catch(() => {});
+
+// One-time backfill for migration 009: packages uploaded before the
+// signature-key directory existed. Parsing needs JS, so it can't be SQL.
+backfillSignatureKeys()
+  .then((n) => { if (n) app.log.info({ n }, "backfilled signature keys"); })
+  .catch((err) => app.log.warn({ err }, "signature key backfill failed"));
+
+async function backfillSignatureKeys() {
+  // Every stored package (a few per device): ON CONFLICT makes repeats free,
+  // and a user with some keys registered may still have older leaves that
+  // aren't.
+  const { rows } = await q(
+    "SELECT kp.key_package, d.user_id FROM mls_key_packages kp JOIN devices d ON d.id = kp.device_id");
+  let n = 0;
+  for (const r of rows) {
+    const p = parseKeyPackage(r.key_package);
+    if (!p) continue;
+    n += (await q("INSERT INTO mls_signature_keys(signature_key, user_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
+      [p.signatureKey, r.user_id])).rowCount;
+  }
+  return n;
+}
 
 const port = Number(process.env.PORT || 8790);
 await app.listen({ port, host: "127.0.0.1" });

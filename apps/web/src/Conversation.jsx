@@ -205,7 +205,15 @@ export default function Conversation({ session, onError, onChange, openModal, on
                     <div className={`max-w-[75%] rounded-xl px-3 py-2 text-sm
                       ${m.mine ? "bg-rose-600/25 text-rose-50" : "border border-white/10 bg-white/[0.04] text-slate-200"}`}>
                       {!m.mine && m.from ? (
-                        <p className="mb-0.5 font-mono text-[10px] font-semibold text-cyan-300/80">{m.from}</p>
+                        <p className="mb-0.5 font-mono text-[10px] font-semibold text-cyan-300/80">
+                          {m.from}
+                          {m.unverified ? (
+                            <span className="ml-1 text-amber-400" title="No account has registered the key that signed this">(unverified)</span>
+                          ) : null}
+                          {m.claimed ? (
+                            <span className="ml-1 text-amber-400" title="The sender's credential names someone else">claims to be {m.claimed}</span>
+                          ) : null}
+                        </p>
                       ) : null}
                       <p className="whitespace-pre-wrap break-words">{m.text}</p>
                       <p className="mt-1 font-mono text-[9px] text-slate-500">

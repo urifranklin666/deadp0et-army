@@ -32,17 +32,30 @@ async function groupMembership(userId, groupIdB64) {
   return rows[0] ?? null;
 }
 
-/** The basic-credential identity a serialized KeyPackage claims, or null. */
-function keyPackageIdentity(bytes) {
+/**
+ * What a serialized KeyPackage claims: its basic-credential identity and its
+ * leaf's signature key. Null if it isn't a KeyPackage.
+ */
+export function parseKeyPackage(bytes) {
   try {
     const dec = decodeMlsMessage(new Uint8Array(bytes), 0);
     const msg = Array.isArray(dec) ? dec[0] : dec;
     if (msg?.wireformat !== "mls_key_package") return null;
-    const cred = msg.keyPackage.leafNode.credential;
-    return cred.credentialType === "basic" ? Buffer.from(cred.identity).toString("utf8") : null;
+    const leaf = msg.keyPackage.leafNode;
+    return {
+      identity: leaf.credential.credentialType === "basic" ? Buffer.from(leaf.credential.identity).toString("utf8") : null,
+      signatureKey: Buffer.from(leaf.signaturePublicKey),
+    };
   } catch {
     return null;
   }
+}
+
+/** Record that `userId` owns this signature key (see migration 009). */
+async function registerSignatureKey(c, signatureKey, userId) {
+  await c.query(
+    "INSERT INTO mls_signature_keys(signature_key, user_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
+    [signatureKey, userId]);
 }
 
 async function keyPackageStatus(deviceId) {
@@ -107,14 +120,13 @@ export async function mlsRoutes(app) {
     // as this device's name, and its owner wrote it. Only accept packages
     // that name their uploader, so nobody can publish themselves as someone
     // else. (KeyPackages are public material; reading one costs no privacy.)
-    for (const kp of items) {
-      const who = keyPackageIdentity(unb64(kp.keyPackage));
-      if (who !== req.user.handle) {
-        return reply.code(400).send({ error: "key package credential must name the uploading user" });
-      }
+    const parsed = items.map((kp) => parseKeyPackage(unb64(kp.keyPackage)));
+    if (parsed.some((p) => p?.identity !== req.user.handle)) {
+      return reply.code(400).send({ error: "key package credential must name the uploading user" });
     }
 
     await tx(async (c) => {
+      for (const p of parsed) await registerSignatureKey(c, p.signatureKey, req.user.id);
       for (const kp of items) {
         await c.query(
           `INSERT INTO mls_key_packages(device_id, ciphersuite, ref, key_package)
@@ -135,6 +147,37 @@ export async function mlsRoutes(app) {
     const dev = await ownedDevice(req.user.id, req.params.id);
     if (!dev) return reply.code(404).send({ error: "no such device" });
     return keyPackageStatus(dev);
+  });
+
+  /**
+   * Register a signature key without publishing a claimable package: the
+   * leaf a founder builds a group from is never offered to anyone, but its
+   * messages still need attributing. Same identity rule as uploads.
+   */
+  app.post("/api/mls/signature-keys", { preHandler: requireSession }, async (req, reply) => {
+    const p = parseKeyPackage(unb64(req.body?.keyPackage ?? ""));
+    if (!p || p.identity !== req.user.handle) {
+      return reply.code(400).send({ error: "key package credential must name the uploading user" });
+    }
+    await tx((c) => registerSignatureKey(c, p.signatureKey, req.user.id));
+    return { ok: true };
+  });
+
+  /**
+   * Whose signature keys are these? Clients attribute messages by the key
+   * that signed them, looked up here, rather than by the (rewritable)
+   * credential. Unknown keys are simply absent from the answer.
+   */
+  app.post("/api/mls/identities", { preHandler: requireSession }, async (req, reply) => {
+    const keys = Array.isArray(req.body?.keys) ? req.body.keys.slice(0, 200).map(String) : [];
+    if (!keys.length) return { identities: {} };
+    // Encode in JS: Postgres's encode(..., 'base64') wraps lines every 76
+    // characters, and a 2.6 KB ML-DSA key would never match the client's.
+    const { rows } = await q(
+      `SELECT k.signature_key, u.handle
+         FROM mls_signature_keys k JOIN users u ON u.id = k.user_id
+        WHERE k.signature_key = ANY($1::bytea[])`, [keys.map(unb64)]);
+    return { identities: Object.fromEntries(rows.map((r) => [b64(r.signature_key), r.handle])) };
   });
 
   // Claim one unclaimed KeyPackage per device belonging to `handle`.

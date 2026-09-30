@@ -467,6 +467,68 @@ assert.equal(gapRoom.B.strokes.length, gapRoom.A.strokes.length,
   "after the snapshot, bob's board matches alice's");
 console.log("· a device past a compaction gap recovers the board from a peer's snapshot");
 
+// ------------------------------------ attribution by key, not credential
+
+// The worst case for credentials: mallory builds a KeyPackage with HER OWN
+// registered signature key but a credential saying "sess_alice", and an
+// inviter running a modified client (no identity check) adds it. MLS
+// verifies mallory's signatures fine — it's her key — so only attributing
+// by the key's registered owner exposes her.
+{
+  const tsmls = await import("ts-mls");
+  const cs = await tsmls.nobleCryptoProvider.getCiphersuiteImpl(tsmls.getCiphersuiteFromName(SUITE));
+  const mPool = (await store.get(K.keyPackagePool(mallory.handle))) || {};
+  const [, mine] = Object.entries(mPool)[0];
+  const decoded = tsmls.decodeMlsMessage(unb64(mine.public), 0);
+  const mPub = (Array.isArray(decoded) ? decoded[0] : decoded).keyPackage.leafNode.signaturePublicKey;
+  const forgedKp = await tsmls.generateKeyPackageWithKey(
+    { credentialType: "basic", identity: new TextEncoder().encode(alice.handle) },
+    tsmls.defaultCapabilities(), tsmls.defaultLifetime, [],
+    { signKey: unb64(mine.sig), publicKey: mPub }, cs);
+  const forgedBytes = tsmls.encodeMlsMessage({ version: "mls10", wireformat: "mls_key_package", keyPackage: forgedKp.publicPackage });
+  const forgedRef = b64(new Uint8Array(await crypto.webcrypto.subtle.digest("SHA-256", forgedBytes)));
+
+  // Mallory keeps the private half where her device will look for it...
+  mPool[forgedRef] = {
+    public: b64(forgedBytes), init: b64(forgedKp.privatePackage.initPrivateKey),
+    hpke: b64(forgedKp.privatePackage.hpkePrivateKey), sig: b64(forgedKp.privatePackage.signaturePrivateKey),
+  };
+  await store.set(K.keyPackagePool(mallory.handle), mPool);
+  // ...and it's the only package of hers left to claim (planted: the server
+  // would refuse to accept its upload, and a real attacker would use the
+  // modified client to add it without any upload at all).
+  await q("UPDATE mls_key_packages SET claimed_at = now() WHERE device_id=$1 AND claimed_at IS NULL", [mDev]);
+  await q("INSERT INTO mls_key_packages(device_id, ciphersuite, ref, key_package) VALUES ($1,$2,$3,$4)",
+    [mDev, SUITE, Buffer.from(unb64(forgedRef)), Buffer.from(forgedBytes)]);
+
+  // The "modified" inviter: alice's client, minus the identity check.
+  as(alice);
+  const G = gapRoom.A;
+  await drain(G);
+  const { keyPackages } = await api.claimKeyPackages(mallory.handle, SUITE, G.groupId);
+  const add = await G.client.addMembers(keyPackages.map((k) => unb64(k.keyPackage)));
+  await api.postMessage(G.groupId, {
+    kind: "commit", epoch: add.builtAtEpoch, senderDeviceId: aDev, payload: b64(add.commit),
+    welcomes: keyPackages.map((k) => ({ ref: k.ref, deviceId: k.deviceId, welcome: b64(add.welcome) })),
+  });
+  await store.set(K.groupState(alice.handle, G.groupId), G.client.exportState());
+
+  as(mallory);
+  const M = new GroupSession(mallory.handle, mDev, G.channel);
+  M.groupId = G.groupId;
+  assert.equal(await M.tryJoin(), true);
+  assert.ok(M.client.members().some((m) => m.identity === alice.handle && m.leafIndex !== undefined));
+  await M.send("hi, it's alice");
+
+  as(bob);
+  await drain(gapRoom.B);
+  const seen = gapRoom.B.history.find((h) => h.text === "hi, it's alice");
+  assert.ok(seen, "bob receives the message");
+  assert.equal(seen.from, mallory.handle, "attribution follows the signing key's registered owner");
+  assert.equal(seen.claimed, alice.handle, "and flags the credential's false claim");
+}
+console.log("· a leaf claiming someone else's name is attributed to its key's real owner, flagged");
+
 await settle();                                     // let fire-and-forget cursor reports land
 await q("DELETE FROM users WHERE handle = ANY($1)", [["sess_alice", "sess_bob", "sess_carol", "sess_dave", "sess_mallory"]]);
 await pool.end();

@@ -42,6 +42,8 @@ export const api = {
   registerDevice: (name, identity) => call("POST", "/api/mls/devices", { name, identity }),
   publishKeyPackages: (deviceId, ciphersuite, keyPackages) =>
     call("POST", "/api/mls/key-packages", { deviceId, ciphersuite, keyPackages }),
+  registerSignatureKey: (keyPackage) => call("POST", "/api/mls/signature-keys", { keyPackage }),
+  identities: (keys) => call("POST", "/api/mls/identities", { keys }),
   keyPackageStatus: (deviceId) => call("GET", `/api/mls/devices/${deviceId}/key-packages`),
   claimKeyPackages: (handle, ciphersuite, groupId) =>
     call("GET", `/api/mls/key-packages/${encodeURIComponent(handle)}?ciphersuite=${encodeURIComponent(ciphersuite)}`
