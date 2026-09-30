@@ -13,7 +13,7 @@
     "@noble/hashes": "^2.2.0",
     "@noble/post-quantum": "^0.6.1",
     "@signalapp/libsignal-client": "^0.99.1",
-    "ts-mls": "^1.6.2"
+    "ts-mls": "^1.6.4"
   },
   "exports": {
     ".": "./src/mls.js",

@@ -127,6 +127,8 @@ export class MlsClient {
   }
 
   get epoch() { return this.#state ? Number(this.#state.groupContext.epoch) : null; }
+  /** False once a commit has removed this member: it can't follow the group any further. */
+  get active() { return !!this.#state && this.#state.groupActiveState?.kind !== "removedFromGroup"; }
   get groupId() { return this.#state ? this.#state.groupContext.groupId : null; }
 
   /** Generate a KeyPackage and keep its private half locally. */
@@ -254,16 +256,27 @@ export class MlsClient {
   async applyWithSender(encoded) {
     const msg = decode(encoded);
     if (msg.wireformat !== "mls_private_message") return { text: null, sender: null };
-    // Only application messages are attributed; don't pay for the extra
-    // sender-data decryption on commits and proposals.
-    const who = msg.privateMessage.contentType === "application"
+    const type = msg.privateMessage.contentType;
+    // Application messages and commits are attributed (a commit can remove
+    // people, and who did it matters); proposals aren't worth the extra
+    // sender-data decryption.
+    const who = type === "application" || type === "commit"
       ? await this.#senderOf(msg.privateMessage).catch(() => null)
       : null;
+    const before = type === "commit" ? this.members() : null;
     const res = await processPrivateMessage(this.#state, msg.privateMessage, emptyPskIndex, this.#cs);
     this.#state = res.newState;
-    return res.kind === "applicationMessage"
-      ? { text: fromUtf8(res.message), sender: who?.identity ?? null, senderKey: who?.key ?? null }
-      : { text: null, sender: null, senderKey: null };
+    const sender = who?.identity ?? null;
+    const senderKey = who?.key ?? null;
+    if (res.kind === "applicationMessage") return { text: fromUtf8(res.message), sender, senderKey };
+    if (!before) return { text: null, sender: null, senderKey: null };
+    // What the commit changed, by leaf: gone, or newly occupied.
+    const after = this.members();
+    const was = new Map(before.map((m) => [m.leafIndex, m.identity]));
+    const now = new Map(after.map((m) => [m.leafIndex, m.identity]));
+    const removed = before.filter((m) => now.get(m.leafIndex) !== m.identity).map((m) => m.identity);
+    const added = after.filter((m) => was.get(m.leafIndex) !== m.identity).map((m) => m.identity);
+    return { text: null, sender, senderKey, removed, added };
   }
 
   /** Resolve a private message's sending leaf to its credential identity. */

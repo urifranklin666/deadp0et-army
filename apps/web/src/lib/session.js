@@ -425,7 +425,28 @@ export class GroupSession {
         continue;
       }
       try {
-        const { text, sender, senderKey } = await this.client.applyWithSender(unb64(m.payload));
+        const { text, sender, senderKey, removed } = await this.client.applyWithSender(unb64(m.payload));
+        if (!this.client.active) {
+          // That commit removed THIS device from the group's encryption. It
+          // can't read anything further, so stop here and forget the group;
+          // if the roster still lists us (an undeclared removal), an owner's
+          // client re-adds us and the Welcome is joined afresh.
+          this.cursor = m.seq;
+          await this.#forget();
+          this.history.push({
+            seq: m.seq, at: m.createdAt,
+            notice: `${sender || "Someone"} removed this device from the group's encryption.`,
+          });
+          return { applied, removed: true };
+        }
+        if (removed?.length) {
+          // An audit line for every removal, named by the committer's key —
+          // including removals a modified client didn't declare to the
+          // server (owner/admin clients also heal those; see #reconcile).
+          const entry = { seq: m.seq, at: m.createdAt, from: sender, audit: { removed: [...new Set(removed)] } };
+          this.history.push(entry);
+          if (senderKey) toAttribute.push([entry, senderKey]);
+        }
         if (text !== null) {
           const env = decodeEnvelope(text);
           if (env.t === T.Y_UPDATE || env.t === T.Y_SNAPSHOT) {
@@ -679,13 +700,28 @@ export class GroupSession {
     if (!this.client || this.removed || !["owner", "admin"].includes(this.channel.role)) return 0;
     if (!force && Date.now() - (this.lastReconcile || 0) < RECONCILE_MS) return 0;
     this.lastReconcile = Date.now();
+    await this.#drain();
     const { members } = await api.members(this.channel.id);
     const roster = new Set(members.map((m) => m.handle));
-    const stale = this.members().filter((h) => h !== this.handle && !roster.has(h));
-    if (!stale.length) return 0;
-    await this.#drain();
-    const res = await this.#commit((client) => client.removeMembers(stale), () => ({ removes: stale }));
-    return res.removed;
+    const inTree = new Set(this.members());
+    let changed = 0;
+
+    // Leaves of people the roster no longer lists (they left): prune.
+    const stale = [...inTree].filter((h) => h !== this.handle && !roster.has(h));
+    if (stale.length) {
+      const res = await this.#commit((client) => client.removeMembers(stale), () => ({ removes: stale }));
+      changed += res.removed;
+    }
+
+    // People the roster lists who have no leaf at all: someone removed them
+    // without telling the server (only a modified client can), or an add was
+    // lost. The roster is the truth; bring them back. Best effort — someone
+    // with no devices or packages right now is retried next time.
+    for (const handle of roster) {
+      if (handle === this.handle || inTree.has(handle)) continue;
+      changed += await this.#invite(handle).catch(() => 0);
+    }
+    return changed;
   }
 
   /** The member handles in this group's current epoch, from the ratchet tree. */
@@ -701,8 +737,11 @@ export class GroupSession {
     // refuses it, so catch up on anyone else's commits first.
     await this.#drain();
     // Only devices not already in this group — which also makes inviting
-    // your own handle the way to bring a new device of yours in.
-    const { keyPackages } = await api.claimKeyPackages(handle, SUITE, this.groupId);
+    // your own handle the way to bring a new device of yours in. Someone with
+    // no leaf at all needs every device, whatever the server believes is in
+    // the group (a removal it wasn't told about leaves it believing wrongly).
+    const { keyPackages } = await api.claimKeyPackages(handle, SUITE,
+      this.members().includes(handle) ? this.groupId : undefined);
     // Whatever a KeyPackage's credential says is what every member will see
     // on that member's messages, and its owner chose it. Refuse any that
     // don't name the person we meant to invite.

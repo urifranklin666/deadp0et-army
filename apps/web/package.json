@@ -21,7 +21,7 @@
     "lucide-react": "^1.26.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "ts-mls": "^1.6.2",
+    "ts-mls": "^1.6.4",
     "yjs": "^13.6.31"
   },
   "devDependencies": {

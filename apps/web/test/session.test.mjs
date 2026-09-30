@@ -284,14 +284,28 @@ assert.equal(B.epoch, A.epoch);
 // Carol notices, and even handed the ciphertext directly cannot read it.
 as(carol);
 const carolKeys = Cs.client;                  // her last state, before she learns of it
+const carolCursorBefore = Cs.cursor;
 const r = await Cs.sync();
 assert.equal(r.removed, true, "the removed device should learn it was removed");
 assert.ok(Cs.history.some((h) => h.notice?.includes("removed")));
-const { rows: [after] } = await q(
-  `SELECT payload FROM mls_messages WHERE group_id=$1 AND kind='application' ORDER BY seq DESC LIMIT 1`,
-  [Buffer.from(A.groupId, "base64")]);
-await assert.rejects(carolKeys.apply(new Uint8Array(after.payload)),
-  "a removed member must not decrypt anything sent after the removal");
+// The strong form: carol's old keys process everything in order — the
+// removal commit included, as a real client would — and still can't read
+// what alice sent afterwards. (ts-mls < 1.6.4 left single-member removals
+// without an UpdatePath, which let the removed member derive the next
+// epoch and read on.)
+const { rows: tail } = await q(
+  `SELECT kind, payload, sender_device_id FROM mls_messages WHERE group_id=$1 AND seq > $2 ORDER BY seq`,
+  [Buffer.from(A.groupId, "base64"), carolCursorBefore]);
+let readAfter = null;
+for (const m of tail) {
+  if (m.sender_device_id === cDev) continue;
+  try {
+    const t = await carolKeys.apply(new Uint8Array(m.payload));
+    if (t && t.includes("after carol left")) readAfter = t;
+  } catch { /* expected once removed */ }
+}
+assert.equal(readAfter, null, "a removed member must not decrypt anything sent after the removal");
+assert.equal(carolKeys.active, false, "processing its own removal leaves the old state inactive");
 console.log("· owner removed carol: access revoked, and later messages are unreadable to her");
 
 // Her device forgot the group, so a later re-invite joins afresh.
@@ -466,6 +480,40 @@ assert.equal(errors(gapRoom.B).length, 0,
 assert.equal(gapRoom.B.strokes.length, gapRoom.A.strokes.length,
   "after the snapshot, bob's board matches alice's");
 console.log("· a device past a compaction gap recovers the board from a peer's snapshot");
+
+// ------------------------------- undeclared removal: audited, then healed
+
+// Bob is a plain member. A modified client lets him commit carol's removal
+// without declaring it, so the server (which can't read commits) accepts it
+// and still lists carol. Alice's client must show who did it, and — as
+// owner — put carol back.
+as(bob);
+await drain(B);
+const silent = await B.client.removeMembers(carol.handle);
+await api.postMessage(B.groupId, { kind: "commit", epoch: silent.builtAtEpoch, senderDeviceId: bDev, payload: b64(silent.commit) });
+await store.set(K.groupState(bob.handle, B.groupId), B.client.exportState());
+
+as(alice);
+await drain(A);
+const audit = A.history.find((h) => h.audit);
+assert.ok(audit, "alice's transcript should record the removal");
+assert.equal(audit.from, bob.handle, "attributed to bob by his signing key");
+assert.deepEqual(audit.audit.removed, [carol.handle]);
+assert.ok(!A.members().includes(carol.handle));
+assert.ok(await A.reconcile() >= 1, "the owner's reconcile should re-add carol");
+assert.ok(A.members().includes(carol.handle), "carol is back in the tree");
+
+// Carol's device processes the removal, notices it can't follow the group
+// any more, forgets it — and joins afresh from the owner's healing Welcome.
+as(carol);
+const evicted = await drain(Cs);
+assert.equal(evicted.removed, true, "carol's device should notice it was removed");
+assert.equal(Cs.client, null);
+assert.equal(await Cs.tryJoin(), true, "and rejoin from the heal");
+as(alice); await A.send("after the heal");
+as(carol); await drain(Cs);
+assert.ok(texts(Cs).includes("after the heal"), "carol reads again after being healed back in");
+console.log("· an undeclared removal is audited by the remover's key and healed by the owner");
 
 // ------------------------------------ attribution by key, not credential
 

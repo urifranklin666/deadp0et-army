@@ -51,8 +51,8 @@ importers:
         specifier: ^8.13.1
         version: 8.22.0
       ts-mls:
-        specifier: ^1.6.2
-        version: 1.6.2(@hpke/chacha20poly1305@1.8.0)(@hpke/ml-kem@0.3.0)(@noble/ciphers@2.2.0)(@noble/curves@2.2.0)(@noble/post-quantum@0.6.1)
+        specifier: ^1.6.4
+        version: 1.6.4(@hpke/chacha20poly1305@1.8.0)(@hpke/ml-kem@0.3.0)(@noble/ciphers@2.2.0)(@noble/curves@2.2.0)(@noble/post-quantum@0.6.1)
     devDependencies:
       '@hpke/chacha20poly1305':
         specifier: ^1.8.0
@@ -158,8 +158,8 @@ importers:
         specifier: ^19.2.8
         version: 19.2.8(react@19.2.8)
       ts-mls:
-        specifier: ^1.6.2
-        version: 1.6.2(@hpke/chacha20poly1305@1.8.0)(@hpke/ml-kem@0.3.0)(@noble/ciphers@2.2.0)(@noble/curves@2.2.0)(@noble/post-quantum@0.6.1)
+        specifier: ^1.6.4
+        version: 1.6.4(@hpke/chacha20poly1305@1.8.0)(@hpke/ml-kem@0.3.0)(@noble/ciphers@2.2.0)(@noble/curves@2.2.0)(@noble/post-quantum@0.6.1)
       yjs:
         specifier: ^13.6.31
         version: 13.6.31
@@ -216,8 +216,8 @@ importers:
         specifier: ^0.99.1
         version: 0.99.1
       ts-mls:
-        specifier: ^1.6.2
-        version: 1.6.2(@hpke/chacha20poly1305@1.8.0)(@hpke/ml-kem@0.3.0)(@noble/ciphers@2.2.0)(@noble/curves@2.2.0)(@noble/post-quantum@0.6.1)
+        specifier: ^1.6.4
+        version: 1.6.4(@hpke/chacha20poly1305@1.8.0)(@hpke/ml-kem@0.3.0)(@noble/ciphers@2.2.0)(@noble/curves@2.2.0)(@noble/post-quantum@0.6.1)
 
 packages:
 
@@ -520,10 +520,6 @@ packages:
 
   '@hpke/common@1.10.1':
     resolution: {integrity: sha512-moJwhmtLtuxiUzzNp1jpfBfx8yefKoO9D/RCR9dmwrnc7qjJqId1rEtQz+lSlU5cabX8daToMSx/7HayXOiaFw==}
-    engines: {node: '>=16.0.0'}
-
-  '@hpke/core@1.8.0':
-    resolution: {integrity: sha512-yHuo+2q4HSPUFuxcg87Kiy7QZRk4IeR+cwBB0qW8fHnr71bnRCArM39Cq1bWHBt75gTyeERGD/v1H14yPB2wyw==}
     engines: {node: '>=16.0.0'}
 
   '@hpke/core@1.9.0':
@@ -2159,13 +2155,13 @@ packages:
   ts-interface-checker@0.1.13:
     resolution: {integrity: sha512-Y/arvbn+rrz3JCKl9C4kVNfTfSm2/mEp5FSz5EsZSANGPSlQrpRI5M4PKF+mJnE52jOO90PnPSc3Ur3bTQw0gA==}
 
-  ts-mls@1.6.2:
-    resolution: {integrity: sha512-Li0Ow/IkcV3x2Jk9zi7QaQlqPIegOFUtM1mfBvvJdCysU/byifYFKWpCkKfKpu2wRa9/RH8MaT+rq/JSheUYTQ==}
+  ts-mls@1.6.4:
+    resolution: {integrity: sha512-BFb9qJ3V1+HIuifC+MtnlROEj3oc6NEzA7Ig1/LAmANDRhNay7UCnwkzijzHH9cav5wf1BoJw8KQ2mXiEhPy1Q==}
     peerDependencies:
-      '@hpke/chacha20poly1305': 1.7.1
-      '@hpke/dhkem-x448': 1.7.0
-      '@hpke/hybridkem-x-wing': 0.6.1
-      '@hpke/ml-kem': 0.2.1
+      '@hpke/chacha20poly1305': 1.8.0
+      '@hpke/dhkem-x448': 1.8.0
+      '@hpke/hybridkem-x-wing': 0.7.0
+      '@hpke/ml-kem': 0.3.0
       '@noble/ciphers': 2.1.1
       '@noble/curves': 2.0.1
       '@noble/post-quantum': 0.5.2
@@ -2600,10 +2596,6 @@ snapshots:
       '@hpke/common': 1.10.1
 
   '@hpke/common@1.10.1': {}
-
-  '@hpke/core@1.8.0':
-    dependencies:
-      '@hpke/common': 1.10.1
 
   '@hpke/core@1.9.0':
     dependencies:
@@ -4492,9 +4484,9 @@ snapshots:
 
   ts-interface-checker@0.1.13: {}
 
-  ts-mls@1.6.2(@hpke/chacha20poly1305@1.8.0)(@hpke/ml-kem@0.3.0)(@noble/ciphers@2.2.0)(@noble/curves@2.2.0)(@noble/post-quantum@0.6.1):
+  ts-mls@1.6.4(@hpke/chacha20poly1305@1.8.0)(@hpke/ml-kem@0.3.0)(@noble/ciphers@2.2.0)(@noble/curves@2.2.0)(@noble/post-quantum@0.6.1):
     dependencies:
-      '@hpke/core': 1.8.0
+      '@hpke/core': 1.9.0
       '@noble/ciphers': 2.2.0
     optionalDependencies:
       '@hpke/chacha20poly1305': 1.8.0

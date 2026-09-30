@@ -190,7 +190,14 @@ export default function Conversation({ session, onError, onChange, openModal, on
           <ul className="space-y-2">
             {session.history.map((m) => (
               <li key={m.seq} className="animate-[dp-rise_0.25s_ease-out_both]">
-                {m.notice ? (
+                {m.audit ? (
+                  <div className="flex items-start gap-2 rounded-lg border border-amber-500/25 bg-amber-950/20 px-3 py-2 text-[11px] text-amber-200">
+                    <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                    <span>
+                      {m.from || "someone"}{m.claimed ? ` (claiming to be ${m.claimed})` : ""} removed {m.audit.removed.join(", ")} from the group
+                    </span>
+                  </div>
+                ) : m.notice ? (
                   <div className="flex items-start gap-2 rounded-lg border border-cyan-500/25 bg-cyan-950/20 px-3 py-2 text-[11px] text-cyan-200">
                     <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
                     <span>{m.notice}</span>

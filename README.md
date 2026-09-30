@@ -153,15 +153,26 @@ allowing only its own scripts and same-origin connections; e2e checks it
 blocks an injected inline script. `frame-ancestors` can't be set from a meta
 tag, so nginx should send it as a header.
 
+**Removals are audited and, if undeclared, healed.** Every client records
+"X removed Y" when it applies a commit that removes someone, naming X by
+signing key. Owner and admin clients reconcile the MLS tree against the
+roster both ways: leaves of people who left are pruned, and anyone the roster
+lists but the tree lacks is re-added. A device that finds itself removed from
+the group's encryption forgets the group and can rejoin from a new Welcome.
+
 ## Known limits
 
 - **Removal authorization binds honest clients only.** Commits are MLS
   *private* messages, opaque to the server. It checks the `removes` a commit
   declares, but cannot see the proposals inside, so a modified client could
-  commit a removal without declaring it. Closing this means sending handshake
-  messages as MLS public messages (revealing membership changes to the
-  server, which largely knows them already) so it can check proposals
-  against roles.
+  commit a removal without declaring it. Every other client records who did
+  it, and owner/admin clients put the member back, but the removal still
+  takes effect until then. Preventing it outright means sending handshake
+  messages as MLS public messages so the server can check proposals against
+  roles.
+- **ts-mls must be ≥ 1.6.4.** Earlier versions omit the UpdatePath from a
+  commit removing a single member, which lets that member derive the next
+  epoch and keep reading. The session suite fails on those versions.
 
 ## Development
 

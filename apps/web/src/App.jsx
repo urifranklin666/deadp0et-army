@@ -166,8 +166,11 @@ function App() {
         // A Welcome for a group this device already holds state for was
         // joined, but its ack never landed (the save happens first, then the
         // ack). Ack it now, or it lingers forever.
+        // Only Welcomes at or before the session's cursor: a newer one may be
+        // re-adding a device that hasn't yet seen the commit removing it.
         const done = welcomes.filter((w) =>
-          [...sessions.current.values()].some((s) => s.client && s.groupId === w.groupId));
+          [...sessions.current.values()].some((s) => s.client && s.groupId === w.groupId
+            && w.joinedAtSeq != null && w.joinedAtSeq <= s.cursor));
         if (done.length) {
           await api.ackWelcomes(deviceId, done.map((w) => w.id)).catch(() => {});
           done.forEach((w) => notifiedWelcomes.current.add(w.id));
