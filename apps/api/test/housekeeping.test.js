@@ -72,6 +72,17 @@ const junkCursor = await api(alice, "POST", `/api/mls/groups/${encodeURIComponen
 assert.ok(junkCursor.status < 500, `junk device id should not 500 (got ${junkCursor.status})`);
 console.log("· malformed ids are rejected as client errors, not 500s");
 
+// ------------------------------------------------ roster + response headers
+
+const roster = await fetch(`${BASE}/api/channels/${ch.id}/members`, { headers: { cookie: alice.cookie } });
+assert.equal(roster.headers.get("cache-control"), "no-store", "api responses must not be cacheable");
+assert.equal(roster.headers.get("x-content-type-options"), "nosniff");
+assert.deepEqual((await roster.json()).members.map((m) => m.handle).sort(), ["hk_alice", "hk_bob"]);
+const nosy = await seedUser("hk_nosy");
+assert.equal((await api(nosy, "GET", `/api/channels/${ch.id}/members`)).status, 404,
+  "a non-member must not see the roster");
+console.log("· roster visible to members only; responses are no-store");
+
 // ---------------------------------------------------- webauthn challenges
 
 const ck = "test:" + crypto.randomBytes(8).toString("hex");
@@ -197,8 +208,9 @@ if (ORIGIN) {
 const extra = [];
 for (let i = 0; i < 5; i++) extra.push(await connect(alice));
 await sleep(200);
-assert.deepEqual(extra.map((w) => w.closedWith ?? null), [null, null, null, null, 4429],
-  "a 5th socket from one user in one group should be refused");
+// Auth checks race, so which socket loses is not fixed — only how many.
+assert.deepEqual(extra.map((w) => w.closedWith ?? null).sort(), [4429, null, null, null, null],
+  "exactly one of 5 sockets from one user in one group should be refused");
 extra.forEach((w) => w.close());
 await sleep(200);
 console.log("· presence sockets capped per user");
@@ -220,7 +232,7 @@ console.log("· presence socket closed after its session was revoked");
 
 wa.close();
 await q("DELETE FROM users WHERE handle = ANY($1)",
-  [["hk_alice", "hk_bob", "hk_expired", "hk_claimant", "hk_outsider", "hk_drainer"]]);
+  [["hk_alice", "hk_bob", "hk_expired", "hk_claimant", "hk_outsider", "hk_drainer", "hk_nosy"]]);
 await pool.end();
 await closeChallenges();
 console.log("\nALL HOUSEKEEPING ASSERTIONS PASSED");

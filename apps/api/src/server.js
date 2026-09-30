@@ -26,6 +26,15 @@ await app.register(rateLimit, { max: Number(process.env.RATE_LIMIT_MAX) || 300, 
 // Presence frames are tiny; the cap here just bounds a hostile client.
 await app.register(websocket, { options: { maxPayload: 8 * 1024 } });
 
+// Every response here is per-user state or key material. Nothing should be
+// cached by the browser or anything between it and us, and nothing should be
+// content-sniffed into something executable.
+app.addHook("onSend", async (req, reply, payload) => {
+  reply.header("cache-control", "no-store");
+  reply.header("x-content-type-options", "nosniff");
+  return payload;
+});
+
 app.get("/api/health", async () => {
   const started = Date.now();
   const db = await q("SELECT 1 AS ok").then(() => "up").catch(() => "down");

@@ -115,6 +115,12 @@ const bubble = alice.page.locator("li", { hasText: REPLY });
 await bubble.waitFor({ timeout: 30000 });
 assert.ok((await bubble.innerText()).includes(bob.handle), "alice should see bob's handle on his message");
 console.log("· bob replied; alice sees it attributed to", bob.handle);
+// The roster lists both members once the epoch has moved.
+await alice.page.getByRole("button", { name: "Members" }).click();
+for (const h of [alice.handle, bob.handle]) {
+  await alice.page.getByRole("listitem").filter({ hasText: h }).first().waitFor({ timeout: 15000 });
+}
+console.log("· member list shows both handles");
 if (process.env.SHOT) await alice.page.screenshot({ path: process.env.SHOT });
 
 const allErrors = [...alice.errors, ...bob.errors];

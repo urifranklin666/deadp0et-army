@@ -47,6 +47,19 @@ export async function messageRoutes(app) {
     return { channels: rows.map((r) => ({ ...r, epoch: r.epoch === null ? null : Number(r.epoch) })) };
   });
 
+  // Who is in a channel. Members only — the roster is itself sensitive.
+  app.get("/api/channels/:id/members", { preHandler: requireSession }, async (req, reply) => {
+    const { rows } = await q(
+      `SELECT u.handle, m.role, m.joined_at AS "joinedAt"
+         FROM channel_members m JOIN users u ON u.id = m.user_id
+        WHERE m.channel_id = $1
+          AND EXISTS (SELECT 1 FROM channel_members me
+                       WHERE me.channel_id = $1 AND me.user_id = $2)
+        ORDER BY m.joined_at`, [req.params.id, req.user.id]);
+    if (!rows.length) return reply.code(404).send({ error: "no such channel" });
+    return { members: rows };
+  });
+
   // Deliver one ciphertext per recipient device.
   app.post("/api/channels/:id/envelopes", { preHandler: requireSession }, async (req, reply) => {
     const items = Array.isArray(req.body?.envelopes) ? req.body.envelopes : [];

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle, Check, Fingerprint, Hash, KeyRound, Loader2, LogOut, Plus,
-  MessageSquare, PenLine, RefreshCw, Send, Shield, Skull, UserPlus, X,
+  MessageSquare, PenLine, RefreshCw, Send, Shield, Skull, UserPlus, Users, X,
 } from "lucide-react";
 import Canvas from "./Canvas.jsx";
 import { ConfirmModal, PromptModal } from "./Modal.jsx";
@@ -10,7 +10,8 @@ import { store, K } from "./lib/db.js";
 import { GroupSession, SUITE, ensureDevice, login, register } from "./lib/session.js";
 
 const SYNC_MS = 2500;
-const BUILD = "2026-07-26.6";
+// eslint-disable-next-line no-undef
+const BUILD = typeof __BUILD__ === "string" ? __BUILD__ : "dev";  // set by vite.config.js
 
 /* ------------------------------------------------------------ primitives */
 
@@ -460,6 +461,57 @@ function EmptyState() {
   );
 }
 
+/**
+ * Who is in the channel, per the server's roster. Refetched whenever the
+ * epoch moves, since adds are commits. (This is membership of the channel,
+ * i.e. who may fetch its ciphertext; who can decrypt is the MLS group.)
+ */
+function Members({ session }) {
+  const [members, setMembers] = useState(null);
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    let dead = false;
+    api.members(session.channel.id)
+      .then((r) => { if (!dead) setMembers(r.members); })
+      .catch(() => { if (!dead) setMembers(null); });
+    return () => { dead = true; };
+  }, [session.channel.id, session.epoch]);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e) => { if (!ref.current?.contains(e.target)) setOpen(false); };
+    const esc = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", close); document.removeEventListener("keydown", esc); };
+  }, [open]);
+
+  if (!members) return null;
+  return (
+    <div ref={ref} className="relative">
+      <button onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-label="Members"
+        className="flex items-center gap-1 rounded px-1.5 py-1 font-mono text-[11px] text-slate-400 hover:bg-white/5 hover:text-white">
+        <Users className="h-3.5 w-3.5" />{members.length}
+      </button>
+      {open ? (
+        <ul className="absolute right-0 top-full z-20 mt-1 max-h-72 min-w-[12rem] overflow-y-auto rounded-lg border
+          border-white/10 bg-[#0b0d14] p-1 shadow-2xl">
+          {members.map((m) => (
+            <li key={m.handle} className="flex items-center justify-between gap-3 rounded px-2 py-1.5 text-xs">
+              <span className="font-mono text-slate-200">{m.handle}</span>
+              {m.role !== "member" ? (
+                <span className="text-[10px] uppercase tracking-wider text-rose-400/80">{m.role}</span>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 function Conversation({ session, onError, onChange, openModal }) {
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(null);
@@ -502,6 +554,7 @@ function Conversation({ session, onError, onChange, openModal }) {
         </div>
 
         <div className="ml-auto flex items-center gap-2">
+          <Members session={session} />
           <button onClick={async () => { try { await session.sync(); onChange(); } catch (e) { onError(e.message); } }}
             className="rounded p-1.5 text-slate-500 hover:bg-white/5 hover:text-white" aria-label="Sync">
             <RefreshCw className="h-3.5 w-3.5" />
