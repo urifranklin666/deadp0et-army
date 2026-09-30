@@ -34,6 +34,7 @@ const SUITES = browser
      "apps/web/test/mobile.mjs", "apps/web/test/multidevice.mjs", "apps/site/test/funnel.mjs"]
   : [
       "apps/api/test/mls.spike.js",
+      "packages/crypto/test/membership.test.js",
       "apps/api/test/e2ee.test.js",
       "apps/api/test/mls.api.test.js",
       "apps/api/test/compaction.test.js",

@@ -227,6 +227,7 @@ both. The browser suites also run against production with
 
 ```bash
 node apps/api/test/mls.spike.js         # ts-mls itself: PQ group, add, one ciphertext for all
+node packages/crypto/test/membership.test.js  # removed can't read on; joiners can't read back
 node apps/api/test/e2ee.test.js         # PQXDH handshake + relay
 node apps/api/test/mls.api.test.js      # delivery service + fork guard
 node apps/api/test/compaction.test.js   # prune safety

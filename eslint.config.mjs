@@ -28,7 +28,7 @@ export default [
     },
   },
   {
-    files: ["apps/api/**/*.js", "packages/crypto/src/**/*.js", "scripts/**/*.mjs", "apps/*/test/**/*.{js,mjs}",
+    files: ["apps/api/**/*.js", "packages/crypto/{src,test}/**/*.js", "scripts/**/*.mjs", "apps/*/test/**/*.{js,mjs}",
       "**/*.config.{js,mjs}"],
     languageOptions: {
       ecmaVersion: "latest",
