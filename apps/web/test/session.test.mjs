@@ -46,6 +46,14 @@ async function seedUser(handle) {
   return { id: rows[0].id, handle, cookie: `dp_session=${token}` };
 }
 
+/** sync() takes one page (200) per call, as the app's loop does; drain it. */
+async function drain(s) {
+  for (let i = 0; i < 50; i++) {
+    const before = s.cursor;
+    const r = await s.sync();
+    if (r.recovered || r.removed || s.cursor === before) return r;
+  }
+}
 const texts = (s) => s.history.filter((h) => h.text !== undefined && !h.mine).map((h) => h.text);
 const errors = (s) => s.history.filter((h) => h.error);
 const settle = () => new Promise((r) => setTimeout(r, 50));
@@ -421,6 +429,43 @@ await afterSync.open(again.groupId);
 assert.equal(afterSync.epoch, (await api.group(again.groupId)).epoch,
   "reloading after syncing past a landed commit keeps the new epoch");
 console.log("· an unsettled commit note is settled by syncing past it, never rolled back wrongly");
+
+// ---------------------------------------------- recovering from a gap
+
+// Bob's device goes quiet for longer than compaction waits for anyone; the
+// log is pruned past what he applied. When he returns he must notice the gap,
+// drop his board, ask for a snapshot, and converge on alice's board.
+const gapRoom = await room("gap");
+as(alice);
+for (let i = 0; i < 600; i++) {           // well past what ts-mls ratchets over by default (200)
+  gapRoom.A.strokes.push([{ c: "#f43f5e", w: 2, p: [[i, i], [i + 1, i + 1]] }]);
+  await gapRoom.A.flushCanvas();
+}
+await drain(gapRoom.A);
+// sync() reports the cursor fire-and-forget; make sure it has landed.
+await api.reportCursor(gapRoom.A.groupId, aDev, gapRoom.A.cursor);
+await q(`UPDATE mls_device_cursors SET updated_at = now() - interval '40 days'
+          WHERE group_id=$1 AND device_id=$2`, [Buffer.from(gapRoom.A.groupId, "base64"), bDev]);
+const { compactGroup } = await import("../../api/src/compaction.js");
+const pruned = await compactGroup(Buffer.from(gapRoom.A.groupId, "base64"));
+assert.ok(pruned.pruned > 0, "compaction should prune past bob's stale cursor");
+
+as(bob);
+const r1 = await gapRoom.B.sync();
+assert.equal(r1.recovered, true, "bob should detect the gap");
+assert.ok(gapRoom.B.history.some((h) => h.notice?.includes("compacted")), "and say so in the transcript");
+// Alice sees the request and answers after a short random delay.
+as(alice);
+await drain(gapRoom.A);
+await new Promise((r) => setTimeout(r, 2200));
+as(bob);
+await drain(gapRoom.B);
+assert.ok(pruned.pruned > 200, `the gap should exceed ts-mls's default forward-ratchet limit (pruned ${pruned.pruned})`);
+assert.equal(errors(gapRoom.B).length, 0,
+  `bob must decrypt everything after the gap: ${errors(gapRoom.B).map((e) => e.error)[0]}`);
+assert.equal(gapRoom.B.strokes.length, gapRoom.A.strokes.length,
+  "after the snapshot, bob's board matches alice's");
+console.log("· a device past a compaction gap recovers the board from a peer's snapshot");
 
 await settle();                                     // let fire-and-forget cursor reports land
 await q("DELETE FROM users WHERE handle = ANY($1)", [["sess_alice", "sess_bob", "sess_carol", "sess_dave", "sess_mallory"]]);

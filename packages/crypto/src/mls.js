@@ -42,7 +42,13 @@ import { decryptSenderData } from "ts-mls/privateMessage.js";
  * reaching into a deep subpath.
  */
 const CLIENT_CONFIG = {
-  keyRetentionConfig: defaultKeyRetentionConfig,
+  // ts-mls refuses to ratchet more than 200 generations forward in one go.
+  // Compaction can prune far more than that from under a device that was
+  // away (a minute of drawing is ~250 canvas messages), and then even the
+  // snapshot sent to rescue it is undecryptable. Each step is one HKDF, so
+  // 100k is a second or two, paid once after a long gap. Retained skipped
+  // keys stay capped at the default, so memory doesn't grow with the gap.
+  keyRetentionConfig: { ...defaultKeyRetentionConfig, maximumForwardRatchetSteps: 100_000 },
   lifetimeConfig: defaultLifetimeConfig,
   keyPackageEqualityConfig: defaultKeyPackageEqualityConfig,
   paddingConfig: defaultPaddingConfig,
@@ -136,7 +142,9 @@ export class MlsClient {
   /** Found a new group; this client becomes its first member. */
   async createGroup(groupId) {
     if (!this.#kp) throw new Error("call newKeyPackage() first");
-    this.#state = await createGroup(groupId, this.#kp.publicPackage, this.#kp.privatePackage, [], this.#cs);
+    // Our config, not the library default, from the first epoch on.
+    this.#state = { ...await createGroup(groupId, this.#kp.publicPackage, this.#kp.privatePackage, [], this.#cs),
+      clientConfig: CLIENT_CONFIG };
     return this.#state;
   }
 
@@ -211,8 +219,9 @@ export class MlsClient {
     if (!this.#kp) throw new Error("call newKeyPackage() first");
     const msg = decode(encodedWelcome);
     if (msg.wireformat !== "mls_welcome") throw new Error("not a welcome");
-    this.#state = await joinGroup(
-      msg.welcome, this.#kp.publicPackage, this.#kp.privatePackage, emptyPskIndex, this.#cs);
+    this.#state = { ...await joinGroup(
+      msg.welcome, this.#kp.publicPackage, this.#kp.privatePackage, emptyPskIndex, this.#cs),
+      clientConfig: CLIENT_CONFIG };
     return this.#state;
   }
 
