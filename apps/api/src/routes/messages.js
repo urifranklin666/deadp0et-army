@@ -68,6 +68,23 @@ export async function messageRoutes(app) {
     return { ok: true };
   });
 
+  // Promote a member to admin, or back. Owner only; the owner's own role is
+  // not changeable here. Admins may remove members (see mls.js).
+  app.post("/api/channels/:id/members/:handle/role", { preHandler: requireSession }, async (req, reply) => {
+    const role = req.body?.role;
+    if (!["admin", "member"].includes(role)) return reply.code(400).send({ error: "role must be admin or member" });
+    const { rows: [me] } = await q(
+      "SELECT role FROM channel_members WHERE channel_id=$1 AND user_id=$2", [req.params.id, req.user.id]);
+    if (!me) return reply.code(404).send({ error: "no such channel" });
+    if (me.role !== "owner") return reply.code(403).send({ error: "only the owner can change roles" });
+    const { rowCount } = await q(
+      `UPDATE channel_members m SET role = $3 FROM users u
+        WHERE m.channel_id = $1 AND m.user_id = u.id AND u.handle = $2 AND m.role <> 'owner'`,
+      [req.params.id, req.params.handle, role]);
+    if (!rowCount) return reply.code(404).send({ error: "no such member" });
+    return { ok: true, role };
+  });
+
   // Who is in a channel. Members only — the roster is itself sensitive.
   app.get("/api/channels/:id/members", { preHandler: requireSession }, async (req, reply) => {
     const { rows } = await q(

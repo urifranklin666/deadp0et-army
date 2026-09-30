@@ -170,6 +170,14 @@ for (const h of [alice.handle, bob.handle]) {
   await alice.page.getByRole("listitem").filter({ hasText: h }).first().waitFor({ timeout: 15000 });
 }
 console.log("· member list shows both handles");
+
+// The owner can promote bob to admin and back.
+const bobRow = alice.page.getByRole("listitem").filter({ hasText: bob.handle });
+await bobRow.getByRole("button", { name: "Make admin" }).click();
+await bobRow.getByText("admin", { exact: true }).waitFor({ timeout: 15000 });
+await bobRow.getByRole("button", { name: "Revoke admin" }).click();
+await bobRow.getByRole("button", { name: "Make admin" }).waitFor({ timeout: 15000 });
+console.log("· owner promotes bob to admin and back");
 if (process.env.SHOT) await alice.page.screenshot({ path: process.env.SHOT });
 
 // Unread: alice moves to another channel; bob posts in the first; alice's

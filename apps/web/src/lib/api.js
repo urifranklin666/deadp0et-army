@@ -31,6 +31,8 @@ export const api = {
 
   channels: () => call("GET", "/api/channels"),
   createChannel: (slug, kind) => call("POST", "/api/channels", { slug, kind }),
+  setRole: (channelId, handle, role) =>
+    call("POST", `/api/channels/${encodeURIComponent(channelId)}/members/${encodeURIComponent(handle)}/role`, { role }),
   leave: (channelId) => call("POST", `/api/channels/${encodeURIComponent(channelId)}/leave`),
   members: (channelId) => call("GET", `/api/channels/${encodeURIComponent(channelId)}/members`),
 

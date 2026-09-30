@@ -24,19 +24,35 @@ export function EmptyState() {
  * epoch moves, since adds are commits. (This is membership of the channel,
  * i.e. who may fetch its ciphertext; who can decrypt is the MLS group.)
  */
-function Members({ session, openModal }) {
+function Members({ session, openModal, onError }) {
   const [members, setMembers] = useState(null);
   const [open, setOpen] = useState(false);
+  const [refresh, setRefresh] = useState(0);
+  const [busy, setBusy] = useState(null);
   const ref = useRef(null);
 
   useEffect(() => {
     if (session.removed) return undefined;    // the roster is no longer ours to read
     let dead = false;
     api.members(session.channel.id)
-      .then((r) => { if (!dead) setMembers(r.members); })
+      .then((r) => {
+        if (dead) return;
+        setMembers(r.members);
+        // Our own role can change under us (promoted, demoted); the session
+        // uses it to decide whether to reconcile leavers' leaves.
+        const me = r.members.find((m) => m.handle === session.handle);
+        if (me) session.channel.role = me.role;
+      })
       .catch(() => { if (!dead) setMembers(null); });
     return () => { dead = true; };
-  }, [session.channel.id, session.epoch, session.removed]);
+  }, [session, session.channel.id, session.epoch, session.removed, refresh]);
+
+  const setRole = async (handle, role) => {
+    setBusy(handle);
+    try { await api.setRole(session.channel.id, handle, role); setRefresh((n) => n + 1); }
+    catch (e) { onError?.(e.message); }
+    finally { setBusy(null); }
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -52,6 +68,8 @@ function Members({ session, openModal }) {
   const mine = members.find((m) => m.handle === session.handle);
   const canRemove = (m) => ["owner", "admin"].includes(mine?.role)
     && m.handle !== session.handle && m.role !== "owner" && !!session.client;
+  const canSetRole = (m) => mine?.role === "owner" && m.role !== "owner";
+  const action = "rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-slate-500 disabled:opacity-40";
   return (
     <div ref={ref} className="relative">
       <button onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-label="Members"
@@ -59,17 +77,24 @@ function Members({ session, openModal }) {
         <Users className="h-3.5 w-3.5" />{members.length}
       </button>
       {open ? (
-        <ul className="absolute right-0 top-full z-20 mt-1 max-h-72 min-w-[12rem] overflow-y-auto rounded-lg border
+        <ul className="absolute right-0 top-full z-20 mt-1 max-h-72 min-w-[16rem] overflow-y-auto rounded-lg border
           border-white/10 bg-[#0b0d14] p-1 shadow-2xl">
           {members.map((m) => (
-            <li key={m.handle} className="flex items-center justify-between gap-3 rounded px-2 py-1.5 text-xs">
-              <span className="font-mono text-slate-200">{m.handle}</span>
+            <li key={m.handle} className="flex items-center gap-2 rounded px-2 py-1.5 text-xs">
+              <span className="min-w-0 flex-1 truncate font-mono text-slate-200">{m.handle}</span>
               {m.role !== "member" ? (
                 <span className="text-[10px] uppercase tracking-wider text-rose-400/80">{m.role}</span>
-              ) : canRemove(m) ? (
+              ) : null}
+              {canSetRole(m) ? (
+                <button disabled={busy === m.handle}
+                  onClick={() => setRole(m.handle, m.role === "admin" ? "member" : "admin")}
+                  className={`${action} hover:bg-white/10 hover:text-white`}>
+                  {m.role === "admin" ? "Revoke admin" : "Make admin"}
+                </button>
+              ) : null}
+              {canRemove(m) ? (
                 <button onClick={() => { setOpen(false); openModal({ kind: "remove", session, handle: m.handle }); }}
-                  className="rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-slate-500
-                    hover:bg-rose-600/20 hover:text-rose-300">
+                  className={`${action} hover:bg-rose-600/20 hover:text-rose-300`}>
                   Remove
                 </button>
               ) : null}
@@ -136,7 +161,7 @@ export default function Conversation({ session, onError, onChange, openModal, on
         </div>
 
         <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-2">
-          <Members session={session} openModal={openModal} />
+          <Members session={session} openModal={openModal} onError={onError} />
           <button onClick={async () => { try { await session.sync(); onChange(); } catch (e) { onError(e.message); } }}
             className="rounded p-1.5 text-slate-500 hover:bg-white/5 hover:text-white" aria-label="Sync">
             <RefreshCw className="h-3.5 w-3.5" />

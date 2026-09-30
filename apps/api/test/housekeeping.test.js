@@ -136,6 +136,17 @@ assert.equal((await api(nosy, "GET", `/api/channels/${ch.id}/members`)).status, 
   "a non-member must not see the roster");
 console.log("· roster visible to members only; responses are no-store");
 
+// Roles: only the owner promotes/demotes, and never the owner's own role.
+const promote = (who, handle, role) => api(who, "POST", `/api/channels/${ch.id}/members/${handle}/role`, { role });
+assert.equal((await promote(bob, "hk_alice", "member")).status, 403, "a member can't change roles");
+assert.equal((await promote(alice, "hk_bob", "admin")).status, 200);
+assert.equal((await api(alice, "GET", `/api/channels/${ch.id}/members`)).json.members
+  .find((m) => m.handle === "hk_bob").role, "admin");
+assert.equal((await promote(alice, "hk_alice", "member")).status, 404, "the owner's own role isn't changeable");
+assert.equal((await promote(alice, "hk_bob", "owner")).status, 400, "no second owner");
+assert.equal((await promote(alice, "hk_bob", "member")).status, 200);
+console.log("· only the owner changes roles, and never their own");
+
 // ---------------------------------------------------- webauthn challenges
 
 const ck = "test:" + crypto.randomBytes(8).toString("hex");
