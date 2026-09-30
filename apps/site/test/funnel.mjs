@@ -8,7 +8,7 @@ import { chromium } from "playwright";
 import assert from "node:assert/strict";
 
 const ORIGIN = process.env.ORIGIN || "https://deadp0et.army";
-const browser = await chromium.launch();
+const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
 const errors = [];
 
 const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });

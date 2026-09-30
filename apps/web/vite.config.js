@@ -8,5 +8,10 @@ export default defineConfig({
   // esnext so the pure-JS post-quantum crypto isn't downlevelled.
   build: { target: "esnext", outDir: "dist" },
   esbuild: { target: "esnext" },
-  server: { port: 5173, proxy: { "/api": "http://127.0.0.1:8790" } },
+  // ws: true so the presence WebSocket is proxied too, not just HTTP.
+  // API_TARGET lets the test runner point a dev server at its own api.
+  server: {
+    port: 5173,
+    proxy: { "/api": { target: process.env.API_TARGET || "http://127.0.0.1:8790", ws: true } },
+  },
 });

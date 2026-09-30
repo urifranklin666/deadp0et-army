@@ -40,5 +40,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm migrate
       - run: pnpm test
+      - run: pnpm --filter web exec playwright install --with-deps chromium
+      - run: pnpm test:browser
       - run: pnpm --filter web build
       - run: pnpm --filter site build

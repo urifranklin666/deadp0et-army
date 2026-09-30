@@ -120,7 +120,8 @@ it, so passkeys cannot be exercised from `localhost` against a production
 ## Tests
 
 Backend suites drive the real HTTP API; browser suites drive a real Chromium
-against the live origin with a CDP virtual WebAuthn authenticator. The session
+with a CDP virtual WebAuthn authenticator, against a local stack or the live
+origin. The session
 suite needs no browser: it seeds sessions in Postgres and runs `session.js`
 in Node over an in-memory IndexedDB.
 
@@ -130,7 +131,11 @@ pnpm test                               # every suite below that runs locally
 
 `pnpm test` starts its own api on port 8791 with test-friendly limits, runs the
 backend and session suites against it, and stops it — Postgres with migrations
-applied is all it needs. CI runs the same thing on every pull request.
+applied is all it needs. `pnpm test:browser` does the same for the console's
+browser suites, adding a Vite dev server on `localhost:5174` with WebAuthn
+pinned to `localhost` (set `CHROMIUM_PATH` to use a Chromium other than
+Playwright's). CI runs both on every pull request. The browser suites also run
+against production with `ORIGIN=https://deadp0et.army`.
 
 ```bash
 node apps/api/test/e2ee.test.js         # PQXDH handshake + relay

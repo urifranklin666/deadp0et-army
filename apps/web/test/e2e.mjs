@@ -46,7 +46,7 @@ async function newUser(browser, handle) {
   return { context, page, errors, handle };
 }
 
-const browser = await chromium.launch();
+const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
 const alice = await newUser(browser, "web_a_" + rnd());
 console.log("· alice registered a passkey and booted:", alice.handle);
 

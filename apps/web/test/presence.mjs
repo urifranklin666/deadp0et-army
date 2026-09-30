@@ -48,7 +48,7 @@ const logLength = (page, groupSlugChannels) =>
     return r.messages.length;
   }, ORIGIN);
 
-const browser = await chromium.launch();
+const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
 const alice = await newUser(browser, "pr_a_" + rnd());
 const bob = await newUser(browser, "pr_b_" + rnd());
 console.log("· two identities registered");

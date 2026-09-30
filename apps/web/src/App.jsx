@@ -164,6 +164,7 @@ function App() {
   const [notice, setNotice] = useState(null);
   const [busy, setBusy] = useState(null);
   const sessions = useRef(new Map());
+  const notifiedWelcomes = useRef(new Set());
   const [modal, setModal] = useState(null);
 
   const bump = useCallback(() => setTick((t) => t + 1), []);
@@ -210,9 +211,14 @@ function App() {
   async function openChannel(ch) {
     setErr(null);
     let s = sessions.current.get(ch.id);
-    if (!s) {
-      s = new GroupSession(handle, deviceId, ch);
-      sessions.current.set(ch.id, s);
+    // A cached session without MLS state is one whose join (or founding)
+    // didn't happen yet — typically opened before the Welcome arrived. Retry
+    // rather than leaving the channel stuck until a reload.
+    if (!s || !s.client) {
+      if (!s) {
+        s = new GroupSession(handle, deviceId, ch);
+        sessions.current.set(ch.id, s);
+      }
       try {
         if (!ch.groupId) {
           // Channel exists with no MLS group yet — we found it.
@@ -267,13 +273,31 @@ function App() {
       try {
         const { welcomes } = await api.welcomes(deviceId);
         if (dead || !welcomes.length) return;
+
+        // A session already open on a group we've just been welcomed into
+        // (the user was looking at it, waiting) joins straight away.
+        let joinedAny = false;
+        for (const s of sessions.current.values()) {
+          if (s.client || !s.groupId || !welcomes.some((w) => w.groupId === s.groupId)) continue;
+          if (await s.tryJoin().catch(() => false)) joinedAny = true;
+        }
+        if (dead) return;
+        if (joinedAny) { setErr(null); bump(); }
+
+        // Announce each Welcome once, not on every poll until it's accepted.
+        const fresh = welcomes.filter((w) => !notifiedWelcomes.current.has(w.id));
+        if (!fresh.length) return;
+        fresh.forEach((w) => notifiedWelcomes.current.add(w.id));
         const { channels: list } = await api.channels();
         if (dead) return;
         setChannels(list);
-        setNotice(`Invited to ${welcomes.length} group${welcomes.length > 1 ? "s" : ""} — open it to join.`);
+        if (!joinedAny) {
+          setNotice(`Invited to ${fresh.length} group${fresh.length > 1 ? "s" : ""} — open it to join.`);
+        }
       } catch { /* transient */ }
     }, SYNC_MS * 2);
     return () => { dead = true; clearInterval(id); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, deviceId]);
 
   // Drain the active group's log.
@@ -291,8 +315,10 @@ function App() {
     pull();
     const id = setInterval(pull, SYNC_MS);
     return () => { dead = true; clearInterval(id); };
+    // `active.client` is in the deps so a session that joins while selected
+    // (Welcome arrived after it was opened) starts syncing without a reselect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, tick === 0]);
+  }, [active, active?.client]);
 
   /* --------------------------------------------------------------- views */
 

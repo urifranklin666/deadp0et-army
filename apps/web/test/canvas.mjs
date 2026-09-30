@@ -55,7 +55,7 @@ async function draw(page, path) {
   await page.mouse.up();
 }
 
-const browser = await chromium.launch();
+const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
 
 // Both identities must exist before the invite: claiming a KeyPackage
 // requires the invitee to have published one.

@@ -6,6 +6,7 @@
     "dev": "pnpm --filter api dev",
     "build": "pnpm -r build",
     "migrate": "node apps/api/src/migrate.js",
-    "test": "node scripts/test.mjs"
+    "test": "node scripts/test.mjs",
+    "test:browser": "node scripts/test.mjs --browser"
   }
 }

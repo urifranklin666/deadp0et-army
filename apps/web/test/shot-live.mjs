@@ -1,7 +1,7 @@
 import { chromium } from "playwright";
 const SP = process.env.SP, APP = "https://deadp0et.army/app/";
 const rnd = () => Math.random().toString(36).slice(2,7);
-const b = await chromium.launch();
+const b = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
 async function mk(handle){
   const c = await b.newContext({ viewport:{width:1280,height:800} });
   const p = await c.newPage();
