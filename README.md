@@ -210,6 +210,14 @@ SESSION_SECRET=…
 it, so passkeys cannot be exercised from `localhost` against a production
 `RP_ID`.
 
+Redis is what lets more than one api node run behind the proxy: WebAuthn
+challenges live there, and delivery hints, presence frames and roster-cache
+invalidations fan out over its pub/sub (`apps/api/src/bus.js`), so a socket
+held by one node hears about a message posted at another. Without
+`REDIS_URL` all of that stays in-process, which is correct for one node
+only. Losing Redis at runtime degrades each node to serving its own
+sockets; hints are advisory, and clients still poll as a fallback.
+
 ## Tests
 
 Backend suites drive the real HTTP API; browser suites drive a real Chromium

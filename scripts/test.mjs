@@ -40,6 +40,7 @@ const SUITES = browser
       "apps/api/test/mls.api.test.js",
       "apps/api/test/compaction.test.js",
       "apps/api/test/housekeeping.test.js",
+      "apps/api/test/cluster.test.js",
       "apps/web/test/session.test.mjs",
     ];
 

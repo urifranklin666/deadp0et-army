@@ -23,9 +23,19 @@ jobs:
           --health-interval 2s
           --health-timeout 5s
           --health-retries 20
+      # Challenges and cross-node fan-out; the cluster suite needs it.
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 20
 
     env:
       DATABASE_URL: postgres://dp:dp@127.0.0.1:5432/dp
+      REDIS_URL: redis://127.0.0.1:6379/0
       RP_ID: localhost
       RP_ORIGIN: http://localhost
       SESSION_SECRET: ci-only-secret-not-used-anywhere-real
