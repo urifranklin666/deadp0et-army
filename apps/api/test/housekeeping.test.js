@@ -59,6 +59,20 @@ const gidBytes = crypto.randomBytes(16);
 const gid = gidBytes.toString("base64");
 await api(alice, "POST", "/api/mls/groups", { channelId: ch.id, groupId: gid, ciphersuite: "test" });
 
+// --------------------------------------------------- ceremony rate limit
+
+// Only meaningful when the api runs with its default limit; the test runner
+// raises it so the browser suites can register many users from one address.
+if (!process.env.AUTH_RATE_LIMIT) {
+  let refused = 0;
+  for (let i = 0; i < 12; i++) {
+    const r = await api({ headers: { "x-forwarded-for": "10.97.0.1" } }, "POST", "/api/auth/login/start", { handle: "nobody" });
+    if (r.status === 429) refused++;
+  }
+  assert.equal(refused, 2, "passkey ceremonies past 10/min per address should be refused");
+  console.log("· passkey ceremonies rate-limited per address");
+}
+
 // ------------------------------------------------------ sign out everywhere
 
 const multi = await seedUser("hk_multi");

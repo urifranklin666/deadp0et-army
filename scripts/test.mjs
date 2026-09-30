@@ -52,6 +52,7 @@ const env = {
   LOG_LEVEL: process.env.LOG_LEVEL || "warn",
   // Suites fire hundreds of requests a minute from one address.
   RATE_LIMIT_MAX: "100000",
+  AUTH_RATE_LIMIT: "100000",
   PRESENCE_RECHECK_MS: "300",
 };
 

@@ -37,9 +37,18 @@ export async function requireSession(req, reply) {
   req.user = rows[0];
 }
 
+// Starting a passkey ceremony is cheap to ask for and creates state (a
+// challenge; on registration, soon an account), so it gets its own per-IP
+// limit well under the global one. A person needs a handful a minute.
+const ceremonyLimit = {
+  config: {
+    rateLimit: { max: Number(process.env.AUTH_RATE_LIMIT) || 10, timeWindow: "1 minute" },
+  },
+};
+
 export async function authRoutes(app) {
   // --- registration ---
-  app.post("/api/auth/register/start", async (req, reply) => {
+  app.post("/api/auth/register/start", ceremonyLimit, async (req, reply) => {
     const handle = String(req.body?.handle || "").toLowerCase().trim();
     if (!/^[a-z0-9_]{3,32}$/.test(handle)) {
       return reply.code(400).send({ error: "handle must be 3-32 chars: a-z 0-9 _" });
@@ -94,7 +103,7 @@ export async function authRoutes(app) {
   });
 
   // --- authentication ---
-  app.post("/api/auth/login/start", async (req) => {
+  app.post("/api/auth/login/start", ceremonyLimit, async (req) => {
     const handle = String(req.body?.handle || "").toLowerCase().trim();
     const { rows } = await q(
       `SELECT c.credential_id, c.transports FROM webauthn_credentials c
