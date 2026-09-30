@@ -218,6 +218,28 @@ assert.ok(alice.hints.some((h) => h.t === "log"), "alice should have received a 
 assert.ok(lag < 4000, `reply took ${lag}ms to reach alice; delivery hints should make it near-instant`);
 assert.ok((await bubble.innerText()).includes(bob.handle), "alice should see bob's handle on his message");
 console.log("· bob replied; alice sees it attributed to", bob.handle, `(${lag}ms, via delivery hint)`);
+
+// Search filters the transcript on this device: bob's reply matches by its
+// text, alice's own earlier message doesn't, and the query goes nowhere.
+{
+  const p = alice.page;
+  const sentOut = [];
+  const spy = (req) => sentOut.push(req.url() + " " + (req.postData() || ""));
+  p.on("request", spy);
+  await p.getByRole("button", { name: "Search messages" }).click();
+  const needle = REPLY.split(" ")[1];                // the random part
+  await p.getByLabel("Search this channel").fill(needle.toUpperCase());   // case-insensitive
+  await p.getByRole("status").filter({ hasText: /^1 match$/ }).waitFor({ timeout: 10000 });
+  assert.equal(await p.locator("mark").first().innerText(), needle, "the match is highlighted");
+  assert.equal(await p.locator("li", { hasText: "first light" }).count(), 0, "non-matching messages are hidden");
+  await p.getByLabel("Search this channel").fill("no-such-words-" + rnd());
+  await p.getByText(/No messages here match/).waitFor({ timeout: 10000 });
+  await p.getByLabel("Search this channel").press("Escape");
+  await p.locator("li", { hasText: "first light" }).first().waitFor({ timeout: 10000 });
+  p.off("request", spy);
+  assert.ok(!sentOut.some((r) => r.toLowerCase().includes(needle)), "the search query must never be sent anywhere");
+  console.log("· search filters and highlights on-device; the query never leaves the page");
+}
 // The roster lists both members once the epoch has moved.
 await alice.page.getByRole("button", { name: "Members" }).click();
 for (const h of [alice.handle, bob.handle]) {

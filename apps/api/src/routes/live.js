@@ -1,6 +1,7 @@
 import { q } from "../db.js";
 import { RECHECK_MS, RP_ORIGIN, sha256 } from "../config.js";
 import { publish, subscribe } from "../bus.js";
+import { onRecheck } from "./notify.js";
 
 /**
  * Ephemeral presence relay.
@@ -31,6 +32,13 @@ function held(groupId, userId) {
   for (const s of rooms.get(groupId) || []) if (s.userId === userId) n++;
   return n;
 }
+
+// A user's access just changed (see recheckSockets): check their sockets now.
+onRecheck((userId) => {
+  for (const set of rooms.values()) {
+    for (const socket of set) if (String(socket.userId) === userId) socket.recheck?.();
+  }
+});
 
 function join(groupId, socket) {
   let set = rooms.get(groupId);
@@ -126,10 +134,11 @@ export async function liveRoutes(app) {
       publish(topic, Buffer.isBuffer(data) ? data : Buffer.from(data), socket);
     });
 
-    const recheck = setInterval(async () => {
+    socket.recheck = async () => {
       const still = await authorise(token, groupId).catch(() => userId);   // a db blip is not a revocation
       if (!still) { leave(groupId, socket); socket.close(4403, "forbidden"); }
-    }, RECHECK_MS);
+    };
+    const recheck = setInterval(socket.recheck, RECHECK_MS);
     recheck.unref();
 
     // No disconnect notification is sent. The server holds no presence key, so

@@ -7,7 +7,7 @@ import { q, tx } from "../db.js";
 import { putChallenge, takeChallenge } from "../challenges.js";
 
 import { RP_ID, RP_ORIGIN, sha256 } from "../config.js";
-import { invalidateMembers } from "./notify.js";
+import { invalidateMembers, recheckSockets } from "./notify.js";
 import { sessionUser } from "../sessions.js";
 
 export { sessionUser };
@@ -233,7 +233,10 @@ export async function authRoutes(app) {
 
   app.post("/api/auth/logout", async (req, reply) => {
     const token = req.cookies?.dp_session;
-    if (token) await q("DELETE FROM sessions WHERE token_hash=$1", [sha256(token)]);
+    if (token) {
+      const { rows } = await q("DELETE FROM sessions WHERE token_hash=$1 RETURNING user_id", [sha256(token)]);
+      if (rows.length) recheckSockets(rows[0].user_id);
+    }
     reply.clearCookie("dp_session", { path: "/" });
     return { ok: true };
   });
@@ -243,6 +246,7 @@ export async function authRoutes(app) {
   // session is cut off.
   app.post("/api/auth/logout-all", { preHandler: requireSession }, async (req, reply) => {
     const { rowCount } = await q("DELETE FROM sessions WHERE user_id=$1", [req.user.id]);
+    recheckSockets(req.user.id);
     reply.clearCookie("dp_session", { path: "/" });
     return { ok: true, ended: rowCount };
   });
@@ -346,6 +350,7 @@ export async function authRoutes(app) {
       await c.query("DELETE FROM users WHERE id=$1", [req.user.id]);
     });
     invalidateMembers();
+    recheckSockets(req.user.id);
     reply.clearCookie("dp_session", { path: "/" });
     return { ok: true };
   });
@@ -368,6 +373,7 @@ export async function authRoutes(app) {
     const { rowCount } = await q(
       "DELETE FROM sessions WHERE id::text = $1 AND user_id = $2", [req.params.id, req.user.id]);
     if (!rowCount) return reply.code(404).send({ error: "no such session" });
+    recheckSockets(req.user.id);
     if (req.params.id === req.user.sessionId) reply.clearCookie("dp_session", { path: "/" });
     return { ok: true, current: req.params.id === req.user.sessionId };
   });
