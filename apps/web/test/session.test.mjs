@@ -349,6 +349,39 @@ assert.ok(texts(B3).includes("sent after reloading"),
 assert.equal(errors(B3).length, 0);
 console.log("· a crash after posting doesn't lead to key reuse on reload");
 
+// --------------------------------- no fork across a crash mid-commit
+
+// The server takes alice's add commit, then the tab dies before the new
+// epoch is saved (here: the post-commit save throws). On reload the pending
+// note is settled against the log: the commit landed, so alice must come
+// back in the NEW epoch, still in step with bob.
+as(alice);
+// "The tab dies" = the first save attempted after the commit POST succeeds.
+const realSetMany = store.setMany;
+const postForCrash = api.postMessage;
+let committed = false;
+api.postMessage = async (gid, body) => {
+  const r = await postForCrash(gid, body);
+  if (body.kind === "commit") committed = true;
+  return r;
+};
+store.setMany = async (entries) => {
+  if (committed) { committed = false; throw new Error("tab closed"); }
+  return realSetMany(entries);
+};
+await assert.rejects(reloaded.invite(carol.handle), /tab closed/);
+store.setMany = realSetMany;
+api.postMessage = postForCrash;
+const serverEpoch = (await api.group(reloaded.groupId)).epoch;
+const again = new GroupSession(alice.handle, aDev, reloaded.channel);
+assert.equal(await again.open(reloaded.groupId), true);
+assert.equal(again.epoch, serverEpoch, "the reloaded device must resume in the epoch its commit created");
+await again.send("still in step after a crash mid-commit");
+as(bob); await B3.sync();
+assert.ok(texts(B3).includes("still in step after a crash mid-commit"));
+assert.equal(errors(B3).length, 0);
+console.log("· a crash mid-commit resumes in the right epoch instead of forking");
+
 await settle();                                     // let fire-and-forget cursor reports land
 await q("DELETE FROM users WHERE handle = ANY($1)", [["sess_alice", "sess_bob", "sess_carol", "sess_dave", "sess_mallory"]]);
 await pool.end();

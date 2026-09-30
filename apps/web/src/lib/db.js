@@ -72,4 +72,5 @@ export const K = {
   cursor: (handle, groupId) => `cur:${handle}:${groupId}`,
   history: (handle, groupId) => `hist:${handle}:${groupId}`,
   ydoc: (handle, groupId) => `ydoc:${handle}:${groupId}`,
+  pendingCommit: (handle, groupId) => `pc:${handle}:${groupId}`,   // { before, epoch } while a commit is in flight
 };

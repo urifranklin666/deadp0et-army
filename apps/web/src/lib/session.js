@@ -273,9 +273,15 @@ export class GroupSession {
       this.groupId = groupIdB64;
       const state = await store.get(K.groupState(this.handle, groupIdB64));
       if (!state) return false;              // known group, but not joined on this device
-      this.client = await MlsClient.restore(this.handle, { keyPackage: kp, state });
       this.cursor = (await store.get(K.cursor(this.handle, groupIdB64))) || 0;
       this.history = (await store.get(K.history(this.handle, groupIdB64))) || [];
+      this.client = await MlsClient.restore(this.handle, { keyPackage: kp, state });
+      try {
+        await this.#settlePendingCommit();
+      } catch (e) {
+        this.client = null;                   // not usable until settled; reopening retries
+        throw e;
+      }
       await this.#restoreDoc();
       return true;
     }
@@ -513,6 +519,16 @@ export class GroupSession {
   async #commit(build, extra = () => ({})) {
     const before = this.client.exportState();
     const res = await build(this.client);
+    // Save the new epoch, with a note of the old one, BEFORE posting. A tab
+    // dying after the server took the commit but before a later save would
+    // otherwise reload the old epoch — and a device can't process its own
+    // commit, so it would be stuck there for good. On the next open the note
+    // is settled against the log (see #settlePendingCommit).
+    const pendingKey = K.pendingCommit(this.handle, this.groupId);
+    await store.setMany([
+      [K.groupState(this.handle, this.groupId), this.client.exportState()],
+      [pendingKey, { before, epoch: res.builtAtEpoch }],
+    ]);
     try {
       await api.postMessage(this.groupId, {
         kind: "commit",
@@ -523,15 +539,39 @@ export class GroupSession {
       });
     } catch (e) {
       const landed = e.status ? false : await this.#ownCommitLanded(res.builtAtEpoch).catch(() => null);
-      if (landed === null) throw e;           // still can't tell; keep state, surface the error
+      if (landed === null) throw e;           // still can't tell; the note stays for the next open
       if (!landed) {
-        const kp = await store.get(K.keyPackage(this.handle));
-        this.client = await MlsClient.restore(this.handle, { keyPackage: kp, state: before });
+        await this.#restoreState(before);
+        await store.del(pendingKey);
         throw e;
       }
     }
     await this.#persist();
+    await store.del(pendingKey);
     return res;
+  }
+
+  /** Put the group back to `state` in memory and on disk. */
+  async #restoreState(state) {
+    const kp = await store.get(K.keyPackage(this.handle));
+    this.client = await MlsClient.restore(this.handle, { keyPackage: kp, state });
+    await store.set(K.groupState(this.handle, this.groupId), state);
+  }
+
+  /**
+   * A commit was saved as pending but its outcome never recorded (the tab
+   * died, or the answer was lost). Keep the new epoch if the commit is in the
+   * log, go back to the old one if it isn't; if the log can't be read, leave
+   * the note and refuse to open, rather than guess.
+   */
+  async #settlePendingCommit() {
+    const key = K.pendingCommit(this.handle, this.groupId);
+    const pending = await store.get(key);
+    if (!pending) return;
+    const landed = await this.#ownCommitLanded(pending.epoch).catch(() => null);
+    if (landed === null) throw new Error("couldn't confirm an unfinished change to this group; try again");
+    if (!landed) await this.#restoreState(pending.before);
+    await store.del(key);
   }
 
   /**
@@ -569,7 +609,8 @@ export class GroupSession {
     this.removed = true;
     this.client = null;
     this.cursor = 0;
-    await store.delMany([K.groupState, K.cursor, K.history, K.ydoc].map((key) => key(this.handle, this.groupId)));
+    await store.delMany([K.groupState, K.cursor, K.history, K.ydoc, K.pendingCommit]
+      .map((key) => key(this.handle, this.groupId)));
   }
 
   /**
