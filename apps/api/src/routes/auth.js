@@ -7,6 +7,10 @@ import { q, tx } from "../db.js";
 import { putChallenge, takeChallenge } from "../challenges.js";
 
 import { RP_ID, RP_ORIGIN, sha256 } from "../config.js";
+import { invalidateMembers } from "./notify.js";
+import { sessionUser } from "../sessions.js";
+
+export { sessionUser };
 const SESSION_TTL_DAYS = 30;
 
 
@@ -21,17 +25,6 @@ async function createSession(reply, userId) {
   });
 }
 
-/** The live session behind a cookie value: { id, handle }, or null. */
-export async function sessionUser(token) {
-  if (!token) return null;
-  const { rows } = await q(
-    `SELECT u.id, u.handle FROM sessions s
-       JOIN users u ON u.id = s.user_id
-      WHERE s.token_hash = $1 AND s.expires_at > now()`,
-    [sha256(token)]
-  );
-  return rows[0] ?? null;
-}
 
 /** Fastify preHandler: attaches req.user or 401s. */
 export async function requireSession(req, reply) {
@@ -56,7 +49,9 @@ export async function authRoutes(app) {
     if (!/^[a-z0-9_]{3,32}$/.test(handle)) {
       return reply.code(400).send({ error: "handle must be 3-32 chars: a-z 0-9 _" });
     }
-    const exists = await q("SELECT 1 FROM users WHERE handle=$1", [handle]);
+    // A deleted account's handle stays retired: see migration 007.
+    const exists = await q(
+      "SELECT 1 FROM users WHERE handle=$1 UNION ALL SELECT 1 FROM retired_handles WHERE handle=$1", [handle]);
     if (exists.rowCount) return reply.code(409).send({ error: "handle taken" });
 
     const userId = crypto.randomUUID();
@@ -177,6 +172,38 @@ export async function authRoutes(app) {
     const { rowCount } = await q("DELETE FROM sessions WHERE user_id=$1", [req.user.id]);
     reply.clearCookie("dp_session", { path: "/" });
     return { ok: true, ended: rowCount };
+  });
+
+  /**
+   * Delete this account. Channels it owns pass to the longest-standing admin
+   * (else member); a channel with nobody else in it goes with the account.
+   * The handle is retired for good. Everything keyed to the user (sessions,
+   * passkeys, devices, key packages, memberships) cascades. The remaining
+   * members' clients prune the account's leftover MLS leaves when they
+   * reconcile against the roster.
+   */
+  app.post("/api/auth/delete", { preHandler: requireSession }, async (req, reply) => {
+    await tx(async (c) => {
+      const { rows: owned } = await c.query(
+        "SELECT channel_id FROM channel_members WHERE user_id=$1 AND role='owner'", [req.user.id]);
+      for (const { channel_id: channelId } of owned) {
+        const { rows: [heir] } = await c.query(
+          `SELECT user_id FROM channel_members
+            WHERE channel_id=$1 AND user_id<>$2
+            ORDER BY (role = 'admin') DESC, joined_at ASC LIMIT 1`, [channelId, req.user.id]);
+        if (heir) {
+          await c.query("UPDATE channel_members SET role='owner' WHERE channel_id=$1 AND user_id=$2",
+            [channelId, heir.user_id]);
+        } else {
+          await c.query("DELETE FROM channels WHERE id=$1", [channelId]);
+        }
+      }
+      await c.query("INSERT INTO retired_handles(handle) VALUES ($1) ON CONFLICT DO NOTHING", [req.user.handle]);
+      await c.query("DELETE FROM users WHERE id=$1", [req.user.id]);
+    });
+    invalidateMembers();
+    reply.clearCookie("dp_session", { path: "/" });
+    return { ok: true };
   });
 
   app.get("/api/auth/me", { preHandler: requireSession }, async (req) => ({ user: req.user }));

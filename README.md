@@ -91,6 +91,11 @@ Leaving works the other way round. A member cannot commit its own removal, so
 the next owner/admin client to reconcile the MLS tree against the channel
 roster commits the removal of the leftover leaf.
 
+**Deleting an account retires its handle.** Channels it owns pass to the
+longest-standing admin (else member); ones with nobody else in them are
+deleted; the browser wipes every key it held for the handle. Handles are how
+members recognise each other, so a deleted one can never be registered again.
+
 **Messages are attributed by credential.** The sender shown on a message is
 the credential of the MLS leaf that signed it, not anything the server says.
 Since anyone can write any identity into their own KeyPackage, an inviter
@@ -206,6 +211,7 @@ other than Playwright's). CI runs both on every pull request. The browser suites
 against production with `ORIGIN=https://deadp0et.army`.
 
 ```bash
+node apps/api/test/mls.spike.js         # ts-mls itself: PQ group, add, one ciphertext for all
 node apps/api/test/e2ee.test.js         # PQXDH handshake + relay
 node apps/api/test/mls.api.test.js      # delivery service + fork guard
 node apps/api/test/compaction.test.js   # prune safety

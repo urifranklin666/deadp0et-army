@@ -1,6 +1,6 @@
 import { q } from "../db.js";
 import { RECHECK_MS, RP_ORIGIN } from "../config.js";
-import { sessionUser } from "./auth.js";
+import { sessionUser } from "../sessions.js";
 
 /**
  * Delivery hints: "group G has something new at seq S".

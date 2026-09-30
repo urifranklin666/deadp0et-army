@@ -214,6 +214,18 @@ if (process.env.SHOT2) await bob.page.screenshot({ path: process.env.SHOT2 });
 
 if (process.env.SHOT3) await alice.page.screenshot({ path: process.env.SHOT3 });
 
+// Bob deletes his account; the handle can't be taken again.
+await bob.page.getByRole("button", { name: "Sign out" }).click();
+await bob.page.getByRole("button", { name: "Delete account…" }).click();
+await bob.page.getByPlaceholder(bob.handle).fill(bob.handle);
+await bob.page.getByRole("button", { name: "Delete for good" }).click();
+await bob.page.getByRole("button", { name: "Create passkey" }).waitFor({ timeout: 30000 });
+await bob.page.getByPlaceholder("ghost_01").fill(bob.handle);
+await bob.page.getByRole("button", { name: "Create passkey" }).click();
+await bob.page.getByText(/handle taken/i).waitFor({ timeout: 15000 });
+bob.errors.splice(0, bob.errors.length, ...bob.errors.filter((e) => !/status of 409/.test(e)));
+console.log("· bob deleted his account; his handle is retired");
+
 // Sign out everywhere: alice lands back on the passkey screen.
 await alice.page.getByRole("button", { name: "Sign out" }).click();
 await alice.page.getByRole("button", { name: "Sign out everywhere" }).click();

@@ -32,7 +32,7 @@ const as = (user) => { cookie = user.cookie; };
 
 const { GroupSession, ensureDevice, topUpKeyPackages } = await import("../src/lib/session.js");
 const { api } = await import("../src/lib/api.js");
-const { store, K } = await import("../src/lib/db.js");
+const { store, K, belongsTo } = await import("../src/lib/db.js");
 const { MlsClient, SUITE, b64, unb64 } = await import("@deadp0et/crypto/mls");
 
 const { decodeMlsMessage } = await import("ts-mls");
@@ -90,6 +90,15 @@ await assert.rejects(store.setMany([["atomic:a", "new"], ["atomic:b", () => "not
 assert.equal(await store.get("atomic:a"), "old", "a failed batch must leave earlier keys untouched");
 assert.equal(await store.get("atomic:b"), undefined);
 console.log("· group state, cursor and transcript are persisted atomically");
+
+// Account deletion wipes every key this browser holds for that handle, and
+// nothing belonging to anyone else.
+await store.setMany([["kp:zed", 1], ["gs:zed:g1", 2], ["cur:zed:g1", 3], ["kp:zedd", 4], ["gs:other:zed", 5]]);
+assert.equal(await store.deleteWhere(belongsTo("zed")), 3);
+assert.equal(await store.get("kp:zedd"), 4, "a handle sharing a prefix is untouched");
+assert.equal(await store.get("gs:other:zed"), 5, "a group id that happens to match is untouched");
+await store.delMany(["kp:zedd", "gs:other:zed"]);
+console.log("· deleting an account wipes exactly that handle's local keys");
 
 // ----------------------------------- founding never reuses a published leaf
 

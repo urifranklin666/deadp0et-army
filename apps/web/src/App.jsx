@@ -5,6 +5,7 @@ import Conversation, { EmptyState } from "./Conversation.jsx";
 import { ChoiceModal, ConfirmModal, PromptModal } from "./Modal.jsx";
 import { Banner } from "./ui.jsx";
 import { api } from "./lib/api.js";
+import { belongsTo, store } from "./lib/db.js";
 import { GroupSession, SUITE, ensureDevice } from "./lib/session.js";
 import { Hints } from "./lib/hints.js";
 import { claimTab } from "./lib/tablock.js";
@@ -434,7 +435,26 @@ function App() {
           choices={[
             { label: "Sign out", primary: true, onPick: async () => { await api.logout(); location.reload(); } },
             { label: "Sign out everywhere", onPick: async () => { await api.logoutAll(); location.reload(); } },
+            { label: "Delete account…", onPick: () => { setModal({ kind: "delete" }); return false; } },
           ]}
+          onClose={() => setModal(null)}
+        />
+      ) : null}
+
+      {modal?.kind === "delete" ? (
+        <PromptModal
+          title="Delete account"
+          label={`Type ${handle} to confirm`}
+          placeholder={handle}
+          hint="Your passkey stops working here, this browser forgets every key, and the handle is retired for good. Channels you own pass to an admin or the longest-standing member; ones with nobody else in them are deleted."
+          submitLabel="Delete for good"
+          validate={(v) => (v && v !== handle ? `Type ${handle} exactly.` : null)}
+          onSubmit={async (v) => {
+            if (v !== handle) throw new Error(`Type ${handle} to confirm.`);
+            await api.deleteAccount();
+            await store.deleteWhere(belongsTo(handle));
+            location.reload();
+          }}
           onClose={() => setModal(null)}
         />
       ) : null}

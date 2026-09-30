@@ -97,6 +97,24 @@ assert.equal((await api({ cookie: `dp_session=${other}` }, "GET", "/api/auth/me"
   "the other device's session must be dead too");
 console.log("· sign-out-everywhere ends every session of the account");
 
+// --------------------------------------------------------- delete account
+
+const quitter = await seedUser("hk_quitter");
+const heir = await seedUser("hk_heir");
+const shared = (await api(quitter, "POST", "/api/channels", { slug: "hk-shared-" + crypto.randomBytes(3).toString("hex") })).json;
+const solo = (await api(quitter, "POST", "/api/channels", { slug: "hk-solo-" + crypto.randomBytes(3).toString("hex") })).json;
+await q("INSERT INTO channel_members(channel_id, user_id) VALUES ($1,$2)", [shared.id, heir.id]);
+assert.equal((await api(quitter, "POST", "/api/auth/delete", {})).status, 200);
+assert.equal((await q("SELECT 1 FROM users WHERE id=$1", [quitter.id])).rowCount, 0, "the account is gone");
+assert.equal((await q("SELECT role FROM channel_members WHERE channel_id=$1 AND user_id=$2",
+  [shared.id, heir.id])).rows[0]?.role, "owner", "a shared channel passes to the remaining member");
+assert.equal((await q("SELECT 1 FROM channels WHERE id=$1", [solo.id])).rowCount, 0,
+  "a channel with nobody else in it goes with the account");
+assert.equal((await api({ headers: { "x-forwarded-for": "10.95.0.1" } }, "POST", "/api/auth/register/start",
+  { handle: "hk_quitter" })).status, 409, "a deleted account's handle is retired");
+await q("DELETE FROM retired_handles WHERE handle='hk_quitter'");
+console.log("· account deletion hands channels on, drops solo ones, and retires the handle");
+
 // ----------------------------------------------------------------- health
 
 const health = await (await fetch(`${BASE}/api/health`)).json();
@@ -340,7 +358,7 @@ hb.close(); ho.close();
 console.log("· delivery hints reach members only, and need a session and our origin");
 
 await q("DELETE FROM users WHERE handle = ANY($1)",
-  [["hk_alice", "hk_bob", "hk_expired", "hk_claimant", "hk_outsider", "hk_drainer", "hk_nosy", "hk_multi"]]);
+  [["hk_alice", "hk_bob", "hk_expired", "hk_claimant", "hk_outsider", "hk_drainer", "hk_nosy", "hk_multi", "hk_heir"]]);
 await pool.end();
 await closeChallenges();
 console.log("\nALL HOUSEKEEPING ASSERTIONS PASSED");

@@ -155,7 +155,8 @@ export function ChoiceModal({ title, body, choices, onClose }) {
   const [busy, setBusy] = useState(null);
   const pick = async (c) => {
     setBusy(c.label);
-    try { await c.onPick(); onClose(); } catch { setBusy(null); }
+    // An onPick that returns false has opened something else; don't close over it.
+    try { if ((await c.onPick()) !== false) onClose(); } catch { setBusy(null); }
   };
   return (
     <Shell title={title} onClose={busy ? () => {} : onClose}>

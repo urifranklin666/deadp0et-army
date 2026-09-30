@@ -59,7 +59,17 @@ export const store = {
    */
   setMany: (entries) => withStore("readwrite", (s) => { for (const [k, v] of entries) s.put(v, k); }),
   delMany: (keys) => withStore("readwrite", (s) => { for (const k of keys) s.delete(k); }),
+  /** Delete every key `match(key)` accepts, in one transaction. */
+  deleteWhere: async (match) => {
+    const keys = await withStore("readonly", (s) => s.getAllKeys());
+    const doomed = keys.filter(match);
+    if (doomed.length) await store.delMany(doomed);
+    return doomed.length;
+  },
 };
+
+/** Every key this store holds for `handle` (they are all "<kind>:<handle>…"). */
+export const belongsTo = (handle) => (key) => String(key).split(":")[1] === handle;
 
 /* ------------------------------------------------------------------ keys */
 /* Namespaced per handle so two accounts on one browser never collide. */
