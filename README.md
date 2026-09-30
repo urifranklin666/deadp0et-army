@@ -81,12 +81,18 @@ otherwise roll one of them back. A sender also never advances its read cursor
 to its own new message — that would skip whatever others posted in between,
 which can never be fetched again.
 
+**Hidden is not deleted.** Every read filters expired rows, and a sweep then
+removes them: expired sessions and application messages, envelopes a day after
+they are acked, used Welcomes and claimed KeyPackages after a grace period.
+Commits are never swept.
+
 **Presence is deliberately outside MLS.** Cursors move at pointer rates;
 routing them through application messages would outrun receivers' skipped-key
 window and grow the ordered log without bound. They are sealed instead under a
 key from the MLS exporter (RFC 9420 §8.5) — same key for every member of an
 epoch, new key on epoch change — and relayed over a WebSocket that persists
-nothing.
+nothing. Each socket re-checks its session and membership every minute, so
+logging out or leaving a channel also stops the frames.
 
 ## Development
 
@@ -119,9 +125,18 @@ suite needs no browser: it seeds sessions in Postgres and runs `session.js`
 in Node over an in-memory IndexedDB.
 
 ```bash
+pnpm test                               # every suite below that runs locally
+```
+
+`pnpm test` starts its own api on port 8791 with test-friendly limits, runs the
+backend and session suites against it, and stops it — Postgres with migrations
+applied is all it needs. CI runs the same thing on every pull request.
+
+```bash
 node apps/api/test/e2ee.test.js         # PQXDH handshake + relay
 node apps/api/test/mls.api.test.js      # delivery service + fork guard
 node apps/api/test/compaction.test.js   # prune safety
+node apps/api/test/housekeeping.test.js # retention sweep, claim throttle, presence revocation
 node apps/web/test/session.test.mjs     # client MLS bookkeeping, against the local api
 node apps/web/test/e2e.mjs              # passkey → channel → message → reload
 node apps/web/test/canvas.mjs           # CRDT convergence, late-joiner snapshot

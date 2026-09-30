@@ -88,7 +88,22 @@ export async function mlsRoutes(app) {
   // Claim one unclaimed KeyPackage per device belonging to `handle`.
   // SKIP LOCKED + the claimed_at write is what stops two concurrent adds
   // being handed the same package.
-  app.get("/api/mls/key-packages/:handle", { preHandler: requireSession }, async (req, reply) => {
+  //
+  // Claiming is destructive — each call burns one of the target's packages —
+  // so it gets a far tighter limit than the global one. Without it any
+  // signed-in user could drain someone's pool and make them uninvitable.
+  // Keyed per session rather than per IP, so one abuser behind a shared
+  // address cannot lock everyone else out of inviting.
+  app.get("/api/mls/key-packages/:handle", {
+    preHandler: requireSession,
+    config: {
+      rateLimit: {
+        max: Number(process.env.KP_CLAIM_LIMIT) || 20,
+        timeWindow: "1 minute",
+        keyGenerator: (req) => `kpclaim:${req.cookies?.dp_session || req.ip}`,
+      },
+    },
+  }, async (req, reply) => {
     const suite = req.query?.ciphersuite;
     if (!suite) return reply.code(400).send({ error: "ciphersuite query param required" });
 

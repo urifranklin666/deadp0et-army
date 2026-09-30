@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "pnpm --filter api dev",
     "build": "pnpm -r build",
-    "migrate": "node apps/api/src/migrate.js"
+    "migrate": "node apps/api/src/migrate.js",
+    "test": "node scripts/test.mjs"
   }
 }

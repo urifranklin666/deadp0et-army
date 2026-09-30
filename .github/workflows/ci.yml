@@ -1,0 +1,44 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: dp
+          POSTGRES_PASSWORD: dp
+          POSTGRES_DB: dp
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U dp"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgres://dp:dp@127.0.0.1:5432/dp
+      RP_ID: localhost
+      RP_ORIGIN: http://localhost
+      SESSION_SECRET: ci-only-secret-not-used-anywhere-real
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm migrate
+      - run: pnpm test
+      - run: pnpm --filter web build
+      - run: pnpm --filter site build

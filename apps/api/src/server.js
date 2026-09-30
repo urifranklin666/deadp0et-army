@@ -9,6 +9,7 @@ import { messageRoutes } from "./routes/messages.js";
 import { mlsRoutes } from "./routes/mls.js";
 import { liveRoutes } from "./routes/live.js";
 import { compactAll } from "./compaction.js";
+import { sweepExpired } from "./retention.js";
 
 const app = Fastify({
   logger: { level: process.env.LOG_LEVEL || "info" },
@@ -18,7 +19,9 @@ const app = Fastify({
 });
 
 await app.register(cookie, { secret: process.env.SESSION_SECRET });
-await app.register(rateLimit, { max: 300, timeWindow: "1 minute" });
+// Per-IP ceiling. Overridable so a test run or a trusted load test can raise
+// it without editing code; individual routes may set tighter limits.
+await app.register(rateLimit, { max: Number(process.env.RATE_LIMIT_MAX) || 300, timeWindow: "1 minute" });
 // Presence frames are tiny; the cap here just bounds a hostile client.
 await app.register(websocket, { options: { maxPayload: 8 * 1024 } });
 
@@ -53,11 +56,13 @@ app.setErrorHandler((err, req, reply) => {
   reply.code(status).send({ error: status >= 500 ? "internal_error" : err.message });
 });
 
-// Periodic compaction. Cheap: it only touches groups whose logs have grown,
-// and prunes strictly below the slowest active device.
+// Periodic housekeeping. Compaction is cheap: it only touches groups whose
+// logs have grown, and prunes strictly below the slowest active device. The
+// retention sweep then deletes rows every read path was already hiding.
 const COMPACT_MS = 5 * 60 * 1000;
 const compactTimer = setInterval(() => {
   compactAll(app.log).catch((err) => app.log.error({ err }, "compaction sweep failed"));
+  sweepExpired(app.log).catch((err) => app.log.error({ err }, "retention sweep failed"));
 }, COMPACT_MS);
 compactTimer.unref();
 

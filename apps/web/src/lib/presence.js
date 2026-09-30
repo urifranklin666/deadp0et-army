@@ -40,7 +40,14 @@ export class Presence {
       this.peers.set(packet.id, { x: packet.x, y: packet.y, handle: packet.h, at: Date.now() });
       this.onChange?.();
     };
-    ws.onclose = () => { this.ws = null; this.#retry(); };
+    ws.onclose = (ev) => {
+      this.ws = null;
+      // 4403: the server says this session may not listen here (logged out,
+      // or no longer a member). Retrying every two seconds would only hammer
+      // it; a fresh Presence is created when the channel is reopened.
+      if (ev.code === 4403) { this.close(); return; }
+      this.#retry();
+    };
     ws.onerror = () => { try { ws.close(); } catch { /* already closing */ } };
 
     this.sweeper ??= setInterval(() => {

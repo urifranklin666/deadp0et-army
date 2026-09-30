@@ -17,6 +17,7 @@ import { q } from "../db.js";
 const rooms = new Map();          // groupId(b64) -> Set<socket>
 const MAX_FRAME = 4096;           // a cursor packet is ~60 bytes
 const MAX_PER_SEC = 40;           // generous for 20Hz, cheap to enforce
+const RECHECK_MS = Number(process.env.PRESENCE_RECHECK_MS) || 60_000;  // max time a revoked session keeps listening
 
 const sha256 = (s) => crypto.createHash("sha256").update(s).digest();
 
@@ -34,24 +35,33 @@ function leave(groupId, socket) {
   if (!set.size) rooms.delete(groupId);
 }
 
+/**
+ * Is this cookie still a live session for a member of the group?
+ * Returns the user id, or null. Checked at connect and then periodically,
+ * because a socket outlives the request that opened it: without the recheck,
+ * logging out or leaving the channel would not stop the frames.
+ */
+async function authorise(token, groupId) {
+  if (!token) return null;
+  const { rows } = await q(
+    `SELECT s.user_id FROM sessions s
+       JOIN mls_groups g ON g.group_id = decode($2,'base64')
+       JOIN channel_members m ON m.channel_id = g.channel_id AND m.user_id = s.user_id
+      WHERE s.token_hash = $1 AND s.expires_at > now()`,
+    [sha256(token), groupId]);
+  return rows[0]?.user_id ?? null;
+}
+
 export async function liveRoutes(app) {
   app.get("/api/mls/groups/:groupId/live", { websocket: true }, async (socket, req) => {
     const groupId = req.params.groupId;
 
     // The WS upgrade carries cookies, so the same session check applies.
+    // (One close code for both failures: telling an outsider "that group
+    // exists but you're not in it" would be a membership oracle.)
     const token = req.cookies?.dp_session;
-    if (!token) { socket.close(4401, "unauthenticated"); return; }
-
-    const auth = await q(
-      `SELECT u.id, u.handle FROM sessions s JOIN users u ON u.id = s.user_id
-        WHERE s.token_hash = $1 AND s.expires_at > now()`, [sha256(token)]);
-    if (!auth.rowCount) { socket.close(4401, "unauthenticated"); return; }
-
-    const member = await q(
-      `SELECT 1 FROM mls_groups g JOIN channel_members m ON m.channel_id = g.channel_id
-        WHERE g.group_id = decode($1,'base64') AND m.user_id = $2`,
-      [groupId, auth.rows[0].id]);
-    if (!member.rowCount) { socket.close(4403, "not a member"); return; }
+    const userId = await authorise(token, groupId).catch(() => null);
+    if (!userId) { socket.close(4403, "forbidden"); return; }
 
     const peers = join(groupId, socket);
     req.log.info({ groupId, peers: peers.size }, "presence: joined");
@@ -72,12 +82,18 @@ export async function liveRoutes(app) {
       }
     });
 
+    const recheck = setInterval(async () => {
+      const still = await authorise(token, groupId).catch(() => userId);   // a db blip is not a revocation
+      if (!still) { leave(groupId, socket); socket.close(4403, "forbidden"); }
+    }, RECHECK_MS);
+    recheck.unref();
+
     // No disconnect notification is sent. The server holds no presence key, so
     // any such frame would be unencrypted and unattributable — a plaintext
     // control channel the client would have to trust. Clients expire a cursor
     // that has been silent for a few seconds instead.
-    socket.on("close", () => leave(groupId, socket));
-
-    socket.on("error", () => leave(groupId, socket));
+    const done = () => { clearInterval(recheck); leave(groupId, socket); };
+    socket.on("close", done);
+    socket.on("error", done);
   });
 }
