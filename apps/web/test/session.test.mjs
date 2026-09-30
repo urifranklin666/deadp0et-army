@@ -514,9 +514,19 @@ assert.ok(A.members().includes(carol.handle), "carol is back in the tree");
 // Carol's device processes the removal, notices it can't follow the group
 // any more, forgets it — and joins afresh from the owner's healing Welcome.
 as(carol);
-const evicted = await drain(Cs);
-assert.equal(evicted.removed, true, "carol's device should notice it was removed");
-assert.equal(Cs.client, null);
+// The report to the server fails the first time; it must not be lost.
+const realReport = api.reportEvicted;
+api.reportEvicted = async () => { throw new TypeError("offline"); };
+const evicted = await drain(Cs).catch((e) => ({ threw: e.message }));
+api.reportEvicted = realReport;
+assert.equal(Cs.client, null, "carol's device should notice it was removed");
+assert.equal(await store.get(K.evictionReport(carol.handle, Cs.groupId)), true, "the unsent report is kept");
+await Cs.retryEvictionReport();
+assert.equal(await store.get(K.evictionReport(carol.handle, Cs.groupId)), undefined, "and cleared once delivered");
+const { rows: [ev] } = await q(
+  "SELECT evicted_at FROM mls_group_devices WHERE group_id=$1 AND device_id=$2", [Buffer.from(Cs.groupId, "base64"), cDev]);
+assert.ok(ev?.evicted_at, "the server now knows this device was evicted");
+void evicted;
 assert.equal(await Cs.tryJoin(), true, "and rejoin from the heal");
 as(alice); await A.send("after the heal");
 as(carol); await drain(Cs);

@@ -34,8 +34,11 @@ async function groupMembership(userId, groupIdB64) {
 
 /** Record that `userId` owns this signature key (see migration 009). */
 export async function registerSignatureKey(c, signatureKey, userId) {
+  // Callers have verified possession of the key, so a proven registration
+  // wins over whatever row was there.
   await c.query(
-    "INSERT INTO mls_signature_keys(signature_key, user_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
+    `INSERT INTO mls_signature_keys(signature_key, user_id) VALUES ($1,$2)
+     ON CONFLICT (signature_key) DO UPDATE SET user_id = EXCLUDED.user_id`,
     [signatureKey, userId]);
 }
 
@@ -175,9 +178,17 @@ export async function mlsRoutes(app) {
     if (!g) return reply.code(404).send({ error: "no such group" });
     const dev = await ownedDevice(req.user.id, req.body?.deviceId);
     if (!dev) return reply.code(400).send({ error: "unknown device" });
+    // The server can't verify the claim (commits are opaque), and each honoured
+    // report makes owner clients add a leaf. A false one from a modified
+    // client costs only a dead duplicate leaf of the reporter's own device;
+    // honouring at most one per device per group per hour bounds that. (An
+    // honest device is rarely evicted twice in an hour.)
     await q(
-      `INSERT INTO mls_group_devices(group_id, device_id, evicted_at) VALUES ($1,$2,now())
-       ON CONFLICT (group_id, device_id) DO UPDATE SET evicted_at = now()`, [g.group_id, dev]);
+      `INSERT INTO mls_group_devices(group_id, device_id, evicted_at, eviction_reported_at)
+       VALUES ($1,$2,now(),now())
+       ON CONFLICT (group_id, device_id) DO UPDATE SET evicted_at = now(), eviction_reported_at = now()
+         WHERE mls_group_devices.eviction_reported_at IS NULL
+            OR mls_group_devices.eviction_reported_at < now() - interval '1 hour'`, [g.group_id, dev]);
     return { ok: true };
   });
 

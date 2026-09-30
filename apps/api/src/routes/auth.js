@@ -18,7 +18,8 @@ async function createSession(reply, userId) {
   const token = crypto.randomBytes(32).toString("base64url");
   const expires = new Date(Date.now() + SESSION_TTL_DAYS * 864e5);
   // Only the hash is stored — a database leak does not yield usable sessions.
-  await q("INSERT INTO sessions(user_id, token_hash, expires_at) VALUES ($1,$2,$3)",
+  // The passkey was proven just now: that's as fresh as a step-up.
+  await q("INSERT INTO sessions(user_id, token_hash, expires_at, reauthed_at) VALUES ($1,$2,$3, now())",
     [userId, sha256(token), expires]);
   reply.setCookie("dp_session", token, {
     httpOnly: true, secure: true, sameSite: "lax", path: "/", expires,
@@ -33,11 +34,15 @@ const REAUTH_WINDOW = "5 minutes";
  * of the account's passkeys within REAUTH_WINDOW. 403 with a machine-readable
  * reason, so the client knows to run the step-up ceremony and retry.
  */
-export async function requireRecentAuth(req, reply) {
+async function recentlyAuthed(token) {
   const { rows } = await q(
     "SELECT 1 FROM sessions WHERE token_hash=$1 AND reauthed_at > now() - $2::interval",
-    [sha256(req.cookies?.dp_session ?? ""), REAUTH_WINDOW]);
-  if (!rows.length) return reply.code(403).send({ error: "reauth_required" });
+    [sha256(token ?? ""), REAUTH_WINDOW]);
+  return rows.length > 0;
+}
+
+export async function requireRecentAuth(req, reply) {
+  if (!(await recentlyAuthed(req.cookies?.dp_session))) return reply.code(403).send({ error: "reauth_required" });
 }
 
 /**
@@ -195,12 +200,9 @@ export async function authRoutes(app) {
 
   // Whether this session's passkey proof is still fresh, so a client can
   // decide to prompt before trying, rather than provoke a 403.
-  app.get("/api/auth/reauth", { preHandler: requireSession }, async (req) => {
-    const { rows } = await q(
-      "SELECT 1 FROM sessions WHERE token_hash=$1 AND reauthed_at > now() - $2::interval",
-      [sha256(req.cookies.dp_session), REAUTH_WINDOW]);
-    return { recent: rows.length > 0 };
-  });
+  app.get("/api/auth/reauth", { preHandler: requireSession }, async (req) => ({
+    recent: await recentlyAuthed(req.cookies.dp_session),
+  }));
 
   app.post("/api/auth/reauth/start", { preHandler: requireSession, ...ceremonyLimit }, async (req) => {
     const { rows } = await q(
@@ -213,12 +215,13 @@ export async function authRoutes(app) {
         transports: r.transports ?? undefined,
       })),
     });
-    await putChallenge(`reauth:${req.user.id}`, { challenge: options.challenge });
+    // Keyed per session, so step-ups in two tabs don't overwrite each other.
+    await putChallenge(`reauth:${sha256(req.cookies.dp_session).toString("hex")}`, { challenge: options.challenge });
     return { options };
   });
 
   app.post("/api/auth/reauth/finish", { preHandler: requireSession }, async (req, reply) => {
-    const pending = await takeChallenge(`reauth:${req.user.id}`);
+    const pending = await takeChallenge(`reauth:${sha256(req.cookies.dp_session).toString("hex")}`);
     if (!pending) return reply.code(400).send({ error: "challenge expired" });
     const r = await verifyAssertion(req.body?.response, pending.challenge, req.user.id);
     if (r.error) return reply.code(r.status).send({ error: r.error });
@@ -275,7 +278,10 @@ export async function authRoutes(app) {
     return { options };
   });
 
-  app.post("/api/auth/passkeys/finish", { preHandler: [requireSession, requireRecentAuth] }, async (req, reply) => {
+  // No fresh-auth check here: /start required one to issue this challenge,
+  // and a window lapsing mid-ceremony would orphan the credential the
+  // authenticator just created.
+  app.post("/api/auth/passkeys/finish", { preHandler: requireSession }, async (req, reply) => {
     const pending = await takeChallenge(`add:${req.user.id}`);
     if (!pending) return reply.code(400).send({ error: "challenge expired" });
     const v = await verifyRegistrationResponse({

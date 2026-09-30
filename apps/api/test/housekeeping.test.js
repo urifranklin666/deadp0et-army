@@ -194,6 +194,21 @@ assert.equal((await promote(alice, "hk_bob", "owner")).status, 400, "no second o
 assert.equal((await promote(alice, "hk_bob", "member")).status, 200);
 console.log("· only the owner changes roles, and never their own");
 
+// ------------------------------------------------- eviction report limit
+
+// A device's eviction report can't be verified (commits are opaque), and
+// each one makes owner clients add a leaf: at most one per hour counts.
+await q("INSERT INTO mls_group_devices(group_id, device_id) VALUES ($1,$2) ON CONFLICT DO NOTHING", [gidBytes, bDev]);
+const evict = () => api(bob, "POST", `/api/mls/groups/${encodeURIComponent(gid)}/evicted`, { deviceId: bDev });
+const evictedAt = async () => (await q(
+  "SELECT evicted_at FROM mls_group_devices WHERE group_id=$1 AND device_id=$2", [gidBytes, bDev])).rows[0].evicted_at;
+assert.equal((await evict()).status, 200);
+assert.ok(await evictedAt(), "a first report is honoured");
+await q("UPDATE mls_group_devices SET evicted_at = NULL WHERE group_id=$1 AND device_id=$2", [gidBytes, bDev]); // healed
+await evict();
+assert.equal(await evictedAt(), null, "a second report within the hour is not");
+console.log("· eviction reports honoured at most hourly per device");
+
 // ---------------------------------------------------- webauthn challenges
 
 const ck = "test:" + crypto.randomBytes(8).toString("hex");

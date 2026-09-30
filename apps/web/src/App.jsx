@@ -160,6 +160,10 @@ function App() {
     const check = async () => {
       last = Date.now();
       try {
+        // Evicted devices whose report to the server didn't get through.
+        for (const s of sessions.current.values()) {
+          if (s.removed && s.groupId) s.retryEvictionReport().catch(() => {});
+        }
         const { welcomes } = await api.welcomes(deviceId);
         if (dead || !welcomes.length) return;
 

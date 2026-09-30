@@ -82,6 +82,7 @@ export const K = {
   cursor: (handle, groupId) => `cur:${handle}:${groupId}`,
   history: (handle, groupId) => `hist:${handle}:${groupId}`,
   ydoc: (handle, groupId) => `ydoc:${handle}:${groupId}`,
-  pendingCommit: (handle, groupId) => `pc:${handle}:${groupId}`,
-  leafRegistered: (handle, groupId) => `lr:${handle}:${groupId}`,  // this device's leaf key is in the directory   // { before, epoch } while a commit is in flight
+  pendingCommit: (handle, groupId) => `pc:${handle}:${groupId}`,   // { before, epoch, since } while a commit is in flight
+  leafRegistered: (handle, groupId) => `lr:${handle}:${groupId}`,  // this device's leaf key is in the directory
+  evictionReport: (handle, groupId) => `ev:${handle}:${groupId}`,  // an eviction the server hasn't heard of yet
 };

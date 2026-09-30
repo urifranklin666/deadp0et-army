@@ -470,7 +470,8 @@ export class GroupSession {
           // removal), owner/admin clients re-add exactly this device, and the
           // Welcome is joined afresh. Name the remover by key, not credential.
           this.cursor = m.seq;
-          await api.reportEvicted(this.groupId, this.deviceId).catch(() => {});
+          await store.set(K.evictionReport(this.handle, this.groupId), true);
+          await this.retryEvictionReport().catch(() => {});   // kept and retried if it fails
           const by = senderKey ? (await ownersOf([senderKey]).catch(() => keyOwners)).get(senderKey) : null;
           await this.#forget();
           this.history.push({
@@ -596,9 +597,11 @@ export class GroupSession {
       return;
     }
     for (const [entry, key] of pairs) {
-      delete entry.pendingKey;
       const owner = owners.get(key);
-      if (!owner) { entry.unverified = true; continue; }
+      // Unknown for now: flag it, but keep the key so a later sync asks again
+      // (after the negative cache lapses) — the owner may register it later.
+      if (!owner) { entry.unverified = true; entry.pendingKey = key; continue; }
+      delete entry.pendingKey;
       delete entry.unverified;
       if (entry.from && entry.from !== owner) entry.claimed = entry.from;
       entry.from = owner;
@@ -687,6 +690,18 @@ export class GroupSession {
     if (!this.client?.active || (await store.get(flag))) return;
     await api.registerSignatureKey(b64(await this.client.leafKeyProof()));
     await store.set(flag, true);
+  }
+
+  /**
+   * Tell the server this device lost its leaf, if it hasn't heard yet. The
+   * note survives reloads: without the report no owner client knows to re-add
+   * this device, so a failed attempt is retried (see App's welcome loop).
+   */
+  async retryEvictionReport() {
+    const key = K.evictionReport(this.handle, this.groupId);
+    if (!(await store.get(key))) return;
+    await api.reportEvicted(this.groupId, this.deviceId);
+    await store.del(key);
   }
 
   /** Put the group back to `state` in memory and on disk. */
