@@ -233,10 +233,15 @@ export class GroupSession {
       return true;
     }
 
-    // Founding a new group.
+    // Founding a new group, from a fresh KeyPackage that is never published.
+    // Building the founder's leaf from the primary package would put the same
+    // leaf keys in this group and in whichever group later claims it —
+    // exactly the reuse single-use KeyPackages exist to prevent. The group
+    // state keeps the leaf's private keys, so this package needs no storage.
     const raw = crypto.getRandomValues(new Uint8Array(16));
     this.groupId = b64(raw);
-    this.client = await MlsClient.restore(this.handle, { keyPackage: kp });
+    this.client = await MlsClient.create(this.handle);
+    await this.client.newKeyPackage();
     await this.client.createGroup(raw);
     await api.createGroup(this.channel.id, this.groupId, SUITE);
     await this.#persist();

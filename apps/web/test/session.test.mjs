@@ -32,6 +32,9 @@ const as = (user) => { cookie = user.cookie; };
 
 const { GroupSession, ensureDevice } = await import("../src/lib/session.js");
 const { api } = await import("../src/lib/api.js");
+const { store, K } = await import("../src/lib/db.js");
+const { unb64 } = await import("@deadp0et/crypto/mls");
+const { decodeMlsMessage } = await import("ts-mls");
 
 async function seedUser(handle) {
   await q("DELETE FROM users WHERE handle=$1", [handle]);
@@ -76,6 +79,20 @@ async function room(slug) {
 // ------------------------------------------------ a send must not skip
 
 const { A, B } = await room("skip");
+
+// ----------------------------------- founding never reuses a published leaf
+
+// Every package this device has published: the primary plus the pool.
+const published = [(await store.get(K.keyPackage(alice.handle)))?.public,
+  ...Object.values((await store.get(K.keyPackagePool(alice.handle))) || {}).map((k) => k.public)];
+const leafKeys = published.filter(Boolean).map((pub) => {
+  const msg = decodeMlsMessage(unb64(pub), 0);
+  return Buffer.from((Array.isArray(msg) ? msg[0] : msg).keyPackage.leafNode.hpkePublicKey);
+});
+const founded = Buffer.from(A.client.exportState());
+assert.ok(leafKeys.length >= 1 && leafKeys.every((k) => !founded.includes(k)),
+  "a founder's leaf must not reuse any published KeyPackage");
+console.log("· founder's leaf is fresh; no published KeyPackage reused");
 
 as(bob); await B.send("from bob, while alice was not looking");
 // Alice sends WITHOUT syncing first. Her cursor is behind bob's message.
@@ -137,6 +154,7 @@ assert.ok(texts(B).includes("still in step after a refused commit"),
 assert.equal(errors(B).length, 0);
 console.log("· refused commit rolled back; alice still in step with the group");
 
+await settle();                                     // let fire-and-forget cursor reports land
 await q("DELETE FROM users WHERE handle = ANY($1)", [["sess_alice", "sess_bob", "sess_carol"]]);
 await pool.end();
 console.log("\nALL SESSION ASSERTIONS PASSED");

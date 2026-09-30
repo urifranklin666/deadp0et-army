@@ -14,6 +14,7 @@ import crypto from "node:crypto";
 import assert from "node:assert/strict";
 import WebSocket from "ws";
 import { sweepExpired } from "../src/retention.js";
+import { putChallenge, takeChallenge, challengeBackend, closeChallenges } from "../src/challenges.js";
 import { q, pool } from "../src/db.js";
 
 const BASE = process.env.BASE || "http://127.0.0.1:8790";
@@ -56,6 +57,29 @@ await q("INSERT INTO channel_members(channel_id, user_id) VALUES ($1,$2)", [ch.i
 const gidBytes = crypto.randomBytes(16);
 const gid = gidBytes.toString("base64");
 await api(alice, "POST", "/api/mls/groups", { channelId: ch.id, groupId: gid, ciphersuite: "test" });
+
+// ------------------------------------------------- malformed ids are 4xx
+
+for (const path of [
+  "/api/mls/devices/not-a-uuid/welcomes",
+  "/api/devices/not-a-uuid/envelopes",
+]) {
+  const r = await api(alice, "GET", path);
+  assert.ok(r.status >= 400 && r.status < 500, `${path} should be a client error, got ${r.status}`);
+}
+const junkCursor = await api(alice, "POST", `/api/mls/groups/${encodeURIComponent(gid)}/cursor`,
+  { deviceId: "not-a-uuid", seq: 1 });
+assert.ok(junkCursor.status < 500, `junk device id should not 500 (got ${junkCursor.status})`);
+console.log("· malformed ids are rejected as client errors, not 500s");
+
+// ---------------------------------------------------- webauthn challenges
+
+const ck = "test:" + crypto.randomBytes(8).toString("hex");
+await putChallenge(ck, { challenge: "abc", handle: "hk_alice" });
+assert.deepEqual(await takeChallenge(ck), { challenge: "abc", handle: "hk_alice" });
+assert.equal(await takeChallenge(ck), null, "a challenge must be redeemable once only");
+assert.equal(await takeChallenge("test:never-issued"), null);
+console.log(`· challenges are single-use (${challengeBackend()} backend)`);
 
 // ------------------------------------------------------------ retention
 
@@ -143,4 +167,5 @@ wa.close();
 await q("DELETE FROM users WHERE handle = ANY($1)",
   [["hk_alice", "hk_bob", "hk_expired", "hk_claimant", "hk_outsider"]]);
 await pool.end();
+await closeChallenges();
 console.log("\nALL HOUSEKEEPING ASSERTIONS PASSED");

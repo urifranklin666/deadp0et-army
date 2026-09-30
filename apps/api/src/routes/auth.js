@@ -4,25 +4,11 @@ import {
   generateAuthenticationOptions, verifyAuthenticationResponse,
 } from "@simplewebauthn/server";
 import { q, tx } from "../db.js";
+import { putChallenge, takeChallenge } from "../challenges.js";
 
 const RP_ID = process.env.RP_ID || "localhost";
 const RP_ORIGIN = process.env.RP_ORIGIN || "http://localhost";
 const SESSION_TTL_DAYS = 30;
-
-// Challenges are short-lived and single-use; keeping them in-process is fine
-// for one node and avoids putting them anywhere they could be replayed from.
-const challenges = new Map();
-const putChallenge = (k, v) => {
-  challenges.set(k, { v, exp: Date.now() + 120_000 });
-  if (challenges.size > 5000) {
-    for (const [key, e] of challenges) if (e.exp < Date.now()) challenges.delete(key);
-  }
-};
-const takeChallenge = (k) => {
-  const e = challenges.get(k);
-  challenges.delete(k);
-  return e && e.exp > Date.now() ? e.v : null;
-};
 
 const sha256 = (s) => crypto.createHash("sha256").update(s).digest();
 
@@ -73,13 +59,13 @@ export async function authRoutes(app) {
         userVerification: "preferred",
       },
     });
-    putChallenge(`reg:${userId}`, { challenge: options.challenge, handle });
+    await putChallenge(`reg:${userId}`, { challenge: options.challenge, handle });
     return { userId, options };
   });
 
   app.post("/api/auth/register/finish", async (req, reply) => {
     const { userId, response } = req.body || {};
-    const pending = takeChallenge(`reg:${userId}`);
+    const pending = await takeChallenge(`reg:${userId}`);
     if (!pending) return reply.code(400).send({ error: "challenge expired" });
 
     const v = await verifyRegistrationResponse({
@@ -123,13 +109,13 @@ export async function authRoutes(app) {
     });
     // Note: options are returned even for an unknown handle, so this endpoint
     // cannot be used to enumerate which handles exist.
-    putChallenge(`auth:${options.challenge}`, { challenge: options.challenge, handle });
+    await putChallenge(`auth:${options.challenge}`, { challenge: options.challenge, handle });
     return { options };
   });
 
   app.post("/api/auth/login/finish", async (req, reply) => {
     const { response, challenge } = req.body || {};
-    const pending = takeChallenge(`auth:${challenge}`);
+    const pending = await takeChallenge(`auth:${challenge}`);
     if (!pending) return reply.code(400).send({ error: "challenge expired" });
 
     if (typeof response?.id !== "string") return reply.code(400).send({ error: "malformed assertion" });
