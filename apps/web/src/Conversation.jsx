@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { AlertTriangle, Hash, ChevronLeft, MessageSquare, PenLine, RefreshCw, Send, Shield, UserPlus, Users } from "lucide-react";
+import { AlertTriangle, Hash, ChevronLeft, MessageSquare, PenLine, RefreshCw, Search, Send, Shield, UserPlus, Users, X } from "lucide-react";
 import Canvas from "./Canvas.jsx";
 import { api } from "./lib/api.js";
 import { Button, fmtTime } from "./ui.jsx";
@@ -116,6 +116,27 @@ function Members({ session, openModal, onError }) {
 
 const PAGE = 200;
 
+/** Does a transcript entry match a (lower-cased) search? Text and sender only. */
+const matches = (m, q) => m.text !== undefined
+  && (m.text.toLowerCase().includes(q) || (m.from || "").toLowerCase().includes(q));
+
+/** `text` with each occurrence of `q` wrapped in <mark>. */
+function Highlight({ text, q }) {
+  const lower = text.toLowerCase();
+  // Lower-casing can change a string's length ("İ"); offsets would then be
+  // wrong, so show such text unmarked rather than mismarked.
+  if (!q || lower.length !== text.length) return text;
+  const out = [];
+  let at = 0;
+  for (let i = lower.indexOf(q); i !== -1; i = lower.indexOf(q, at)) {
+    if (i > at) out.push(text.slice(at, i));
+    out.push(<mark key={i} className="rounded-sm bg-amber-400/30 text-inherit">{text.slice(i, i + q.length)}</mark>);
+    at = i + q.length;
+  }
+  out.push(text.slice(at));
+  return out;
+}
+
 export default function Conversation({ session, onError, onChange, openModal, onBack }) {
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(null);
@@ -125,10 +146,17 @@ export default function Conversation({ session, onError, onChange, openModal, on
   // long-lived channel's full history would make each new message cost a
   // render of thousands of rows. Older ones are a click away.
   const [shown, setShown] = useState(PAGE);
-  const hidden = Math.max(0, session.history.length - shown);
-  const visible = hidden ? session.history.slice(hidden) : session.history;
+  // Search runs over the decrypted transcript on this device; the query
+  // never leaves it (the server only has ciphertext to search anyway).
+  const [searching, setSearching] = useState(false);
+  const [query, setQuery] = useState("");
+  const q = searching ? query.trim().toLowerCase() : "";
+  const source = q ? session.history.filter((m) => matches(m, q)) : session.history;
+  const hidden = Math.max(0, source.length - shown);
+  const visible = hidden ? source.slice(hidden) : source;
+  const closeSearch = () => { setSearching(false); setQuery(""); setShown(PAGE); };
 
-  useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [session.history.length]);
+  useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [session.history.length, q]);
 
   // A removed session keeps its transcript readable but can no longer act.
   const joined = !!session.client && !session.removed;
@@ -169,6 +197,12 @@ export default function Conversation({ session, onError, onChange, openModal, on
         </div>
 
         <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-2">
+          {mode === "chat" ? (
+            <button onClick={() => (searching ? closeSearch() : setSearching(true))} aria-pressed={searching}
+              className="rounded p-1.5 text-slate-500 hover:bg-white/5 hover:text-white" aria-label="Search messages">
+              <Search className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
           <Members session={session} openModal={openModal} onError={onError} />
           <button onClick={async () => { try { await session.sync(); onChange(); } catch (e) { onError(e.message); } }}
             className="rounded p-1.5 text-slate-500 hover:bg-white/5 hover:text-white" aria-label="Sync">
@@ -183,6 +217,24 @@ export default function Conversation({ session, onError, onChange, openModal, on
 
       {mode === "canvas" ? <Canvas session={session} onError={onError} openModal={openModal} /> : (
       <>
+      {searching ? (
+        <div className="flex shrink-0 items-center gap-2 border-b border-white/10 px-3 py-2 sm:px-4">
+          <Search className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+          <input autoFocus value={query} onChange={(e) => { setQuery(e.target.value); setShown(PAGE); }}
+            onKeyDown={(e) => { if (e.key === "Escape") closeSearch(); }}
+            placeholder="Search this channel (on this device)" aria-label="Search this channel"
+            className="min-w-0 flex-1 bg-transparent text-sm text-white placeholder:text-slate-600 focus:outline-none" />
+          {q ? (
+            <span className="shrink-0 font-mono text-[10px] text-slate-500" role="status">
+              {source.length} match{source.length === 1 ? "" : "es"}
+            </span>
+          ) : null}
+          <button onClick={closeSearch} aria-label="Close search"
+            className="rounded p-1 text-slate-500 hover:bg-white/5 hover:text-white">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ) : null}
       <div className="dp-scroll min-h-0 flex-1 overflow-y-auto px-4 py-4">
         {!session.client && !session.removed ? (
           <p className="mx-auto max-w-sm text-center text-[11px] leading-relaxed text-slate-600">
@@ -194,13 +246,17 @@ export default function Conversation({ session, onError, onChange, openModal, on
           <p className="mx-auto max-w-sm text-center text-[11px] text-slate-600">
             Nothing here yet. Say something unwise.
           </p>
+        ) : q && source.length === 0 ? (
+          <p className="mx-auto max-w-sm text-center text-[11px] text-slate-600">
+            No messages here match “{query.trim()}”.
+          </p>
         ) : (
           <ul className="space-y-2">
             {hidden ? (
               <li className="text-center">
                 <button onClick={() => setShown((n) => n + PAGE)}
                   className="rounded-md border border-white/10 px-3 py-1 text-[11px] text-slate-400 hover:text-white">
-                  Show {Math.min(PAGE, hidden)} earlier message{Math.min(PAGE, hidden) === 1 ? "" : "s"}
+                  Show {Math.min(PAGE, hidden)} earlier {q ? "match" : "message"}{Math.min(PAGE, hidden) === 1 ? "" : q ? "es" : "s"}
                 </button>
               </li>
             ) : null}
@@ -232,7 +288,7 @@ export default function Conversation({ session, onError, onChange, openModal, on
                       ${m.mine ? "bg-rose-600/25 text-rose-50" : "border border-white/10 bg-white/[0.04] text-slate-200"}`}>
                       {!m.mine && m.from ? (
                         <p className="mb-0.5 font-mono text-[10px] font-semibold text-cyan-300/80">
-                          {m.from}
+                          <Highlight text={m.from} q={q} />
                           {m.unverified ? (
                             <span className="ml-1 text-amber-400" title="No account has registered the key that signed this">(unverified)</span>
                           ) : null}
@@ -241,7 +297,7 @@ export default function Conversation({ session, onError, onChange, openModal, on
                           ) : null}
                         </p>
                       ) : null}
-                      <p className="whitespace-pre-wrap break-words">{m.text}</p>
+                      <p className="whitespace-pre-wrap break-words"><Highlight text={m.text} q={q} /></p>
                       <p className="mt-1 font-mono text-[9px] text-slate-500">
                         {m.at ? <time dateTime={m.at} title={new Date(m.at).toLocaleString()}>{fmtTime(m.at)}</time> : null}
                         {m.at ? " · " : null}#{m.seq}
