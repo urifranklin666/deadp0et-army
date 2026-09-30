@@ -300,7 +300,7 @@ function App() {
           <button
             onClick={() => setModal({ kind: "signout" })}
             className="rounded-lg border border-white/10 p-1.5 text-slate-400 hover:text-white"
-            aria-label="Sign out"
+            aria-label="Account"
           >
             <LogOut className="h-4 w-4" />
           </button>
@@ -430,8 +430,8 @@ function App() {
         // This device keeps its keys either way: signing back in picks up
         // where it left off.
         <ChoiceModal
-          title="Sign out"
-          body={'This device keeps its keys either way. "Everywhere" also ends every other session on your account — use it if a device is lost.'}
+          title="Account"
+          body={'Signing out keeps this device\'s keys either way. "Everywhere" also ends every other session on your account — use it if a device is lost.'}
           choices={[
             { label: "Sign out", primary: true, onPick: async () => { await api.logout(); location.reload(); } },
             { label: "Sign out everywhere", onPick: async () => { await api.logoutAll(); location.reload(); } },

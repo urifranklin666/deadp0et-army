@@ -90,7 +90,9 @@ export async function authRoutes(app) {
       await c.query(
         `INSERT INTO webauthn_credentials(user_id, credential_id, public_key, counter, transports)
          VALUES ($1,$2,$3,$4,$5)`,
-        [userId, Buffer.from(credential.id), Buffer.from(credential.publicKey),
+        // credential.id is a base64url STRING; store the raw id bytes, which
+        // is what login looks up (and hands back to the authenticator).
+        [userId, Buffer.from(credential.id, "base64url"), Buffer.from(credential.publicKey),
          credential.counter ?? 0, credential.transports ?? null]
       );
       return true;

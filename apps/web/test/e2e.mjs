@@ -81,6 +81,16 @@ if (csp) {
   console.log("· (no CSP: dev server)");
 }
 
+// Signing back in with the passkey — not just riding the session cookie
+// registration left behind — is the path every returning user takes.
+await alice.page.getByRole("button", { name: "Account" }).click();
+await alice.page.getByRole("button", { name: "Sign out", exact: true }).click();
+await alice.page.getByRole("button", { name: "Sign in" }).waitFor({ timeout: 30000 });
+await alice.page.getByPlaceholder("ghost_01").fill(alice.handle);
+await alice.page.getByRole("button", { name: "Sign in" }).click();
+await alice.page.getByRole("button", { name: "New channel" }).waitFor({ timeout: 60000 });
+console.log("· alice signed out and back in with her passkey");
+
 // Channel creation founds an MLS group client-side, then registers it.
 const slug = "room-" + rnd();
 await alice.page.getByRole("button", { name: "New channel" }).click();
@@ -215,7 +225,7 @@ if (process.env.SHOT2) await bob.page.screenshot({ path: process.env.SHOT2 });
 if (process.env.SHOT3) await alice.page.screenshot({ path: process.env.SHOT3 });
 
 // Bob deletes his account; the handle can't be taken again.
-await bob.page.getByRole("button", { name: "Sign out" }).click();
+await bob.page.getByRole("button", { name: "Account" }).click();
 await bob.page.getByRole("button", { name: "Delete account…" }).click();
 await bob.page.getByPlaceholder(bob.handle).fill(bob.handle);
 await bob.page.getByRole("button", { name: "Delete for good" }).click();
@@ -227,7 +237,7 @@ bob.errors.splice(0, bob.errors.length, ...bob.errors.filter((e) => !/status of 
 console.log("· bob deleted his account; his handle is retired");
 
 // Sign out everywhere: alice lands back on the passkey screen.
-await alice.page.getByRole("button", { name: "Sign out" }).click();
+await alice.page.getByRole("button", { name: "Account" }).click();
 await alice.page.getByRole("button", { name: "Sign out everywhere" }).click();
 await alice.page.getByRole("button", { name: "Create passkey" }).waitFor({ timeout: 30000 });
 console.log("· sign out everywhere returns to the passkey screen");
