@@ -6,15 +6,16 @@
  *   pnpm test:browser         # the web console's browser suites, via Vite + Chromium
  *
  * Starts apps/api on a spare port with test-friendly limits (and, for the
- * browser suites, a Vite dev server proxying to it with WebAuthn pinned to
- * localhost), runs each suite in turn, and always stops what it started.
+ * browser suites, the console's production build served by `vite preview`,
+ * proxying to it, with WebAuthn pinned to localhost), runs each suite in
+ * turn, and always stops what it started.
  * Set CHROMIUM_PATH to use a Chromium other than Playwright's own.
  *
  * The marketing funnel needs the site and the console on one origin, as
  * nginx serves them; browser mode recreates that with a second Vite server
  * for the site that proxies /app to the console's.
  */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -81,8 +82,14 @@ start([process.execPath, "apps/api/src/server.js"]);
 await waitFor(`${API}/api/health`, async (r) => (await r.json()).status === "ok", "api");
 
 if (browser) {
-  start([process.execPath, "node_modules/vite/bin/vite.js", "--port", WEB_PORT, "--strictPort"],
-    { cwd: path.join(root, "apps/web"), stdio: "ignore" });
+  // The production bundle, not the dev server: that is what ships, and only
+  // the build carries the Content-Security-Policy the suites must live under.
+  const web = path.join(root, "apps/web");
+  const built = spawnSync(process.execPath, ["node_modules/vite/bin/vite.js", "build", "--logLevel", "warn"],
+    { cwd: web, env, stdio: "inherit" });
+  if (built.status !== 0) throw new Error("console build failed");
+  start([process.execPath, "node_modules/vite/bin/vite.js", "preview", "--port", WEB_PORT, "--strictPort"],
+    { cwd: web, stdio: "ignore" });
   await waitFor(`${WEB}/app/`, (r) => r.ok, "vite");
   start([process.execPath, "node_modules/vite/bin/vite.js", "--port", SITE_PORT, "--strictPort"],
     { cwd: path.join(root, "apps/site"), stdio: "ignore" });

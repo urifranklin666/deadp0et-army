@@ -122,6 +122,12 @@ epoch, new key on epoch change — and relayed over a WebSocket that persists
 nothing. Each socket re-checks its session and membership every minute, so
 logging out or leaving a channel also stops the frames.
 
+**The console ships a Content-Security-Policy.** It holds private keys in
+IndexedDB, so injected script is key theft. The build adds a meta CSP
+allowing only its own scripts and same-origin connections; e2e checks it
+blocks an injected inline script. `frame-ancestors` can't be set from a meta
+tag, so nginx should send it as a header.
+
 ## Known limits
 
 Both follow from commits being MLS *private* messages (opaque to the server)
@@ -177,8 +183,8 @@ pnpm test                               # every suite below that runs locally
 `pnpm test` starts its own api on port 8791 with test-friendly limits, runs the
 backend and session suites against it, and stops it — Postgres with migrations
 applied is all it needs. `pnpm test:browser` does the same for the browser
-suites: a Vite dev server for the console on `localhost:5174` with WebAuthn
-pinned to `localhost`, and one for the site on `localhost:5175` that proxies
+suites: the console's production build (`vite preview`, CSP included) on
+`localhost:5174` with WebAuthn pinned to `localhost`, and one for the site on `localhost:5175` that proxies
 `/app` and `/api` the way nginx does (set `CHROMIUM_PATH` to use a Chromium
 other than Playwright's). CI runs both on every pull request. The browser suites also run
 against production with `ORIGIN=https://deadp0et.army`.

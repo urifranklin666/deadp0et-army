@@ -59,6 +59,28 @@ const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PAT
 const alice = await newUser(browser, "web_a_" + rnd());
 console.log("· alice registered a passkey and booted:", alice.handle);
 
+// The console holds private keys, so injected script is key theft. The
+// production build ships a CSP that must stop an inline <script> cold.
+// (Skipped against a dev server, which has no CSP by design.)
+const csp = await alice.page.evaluate(() =>
+  document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.content || null);
+if (csp) {
+  assert.match(csp, /script-src 'self'/);
+  const ran = await alice.page.evaluate(() => new Promise((resolve) => {
+    const el = document.createElement("script");
+    el.textContent = "window.__injected = true";
+    document.head.appendChild(el);
+    setTimeout(() => resolve(window.__injected === true), 100);
+  }));
+  assert.equal(ran, false, "an injected inline script must not run");
+  // The refusal logs a CSP violation — the expected outcome, not a fault.
+  const others = alice.errors.filter((e) => !/Content Security Policy/i.test(e));
+  alice.errors.splice(0, alice.errors.length, ...others);
+  console.log("· CSP present and blocks injected inline script");
+} else {
+  console.log("· (no CSP: dev server)");
+}
+
 // Channel creation founds an MLS group client-side, then registers it.
 const slug = "room-" + rnd();
 await alice.page.getByRole("button", { name: "New channel" }).click();
