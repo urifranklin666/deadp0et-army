@@ -1,6 +1,7 @@
 import { q, tx } from "../db.js";
 import { requireSession } from "./auth.js";
 import { revokeAccess } from "../membership.js";
+import { hintGroup, hintWelcome } from "./notify.js";
 import { decodeMlsMessage } from "ts-mls";
 
 const b64 = (buf) => Buffer.from(buf).toString("base64");
@@ -272,7 +273,8 @@ export async function mlsRoutes(app) {
       ? new Date(Date.now() + ttl * 864e5) : null;
 
     try {
-      return await tx(async (c) => {
+      const revoked = [];
+      const out = await tx(async (c) => {
         let writeEpoch = Number(g.epoch);
 
         // A Welcome grants channel membership (below), so it must be backed
@@ -335,6 +337,7 @@ export async function mlsRoutes(app) {
             throw Object.assign(new Error("only a channel owner or admin can remove members"), { statusCode: 403 });
           }
           await revokeAccess(c, g.channel_id, target.id);
+          revoked.push(target.id);
         }
 
         // Welcomes ride along with the commit that added the members.
@@ -365,6 +368,10 @@ export async function mlsRoutes(app) {
         }
         return { seq, epoch: writeEpoch };
       });
+      // Only after the commit is durable. Best effort: clients also poll.
+      hintGroup(g.group_id, out.seq, revoked).catch(() => {});
+      hintWelcome(adds.map((w) => String(w.deviceId))).catch(() => {});
+      return out;
     } catch (e) {
       if (e.statusCode) return reply.code(e.statusCode).send({ error: e.message });
       // The partial unique index is the backstop if the guard is ever bypassed.

@@ -21,7 +21,12 @@ async function newUser(browser, handle) {
   const context = await browser.newContext();
   const page = await context.newPage();
   const errors = [];
-  const user = { removed: false };
+  const user = { removed: false, hints: [] };
+  // Record delivery hints the api pushes to this tab.
+  page.on("websocket", (ws) => {
+    if (!ws.url().endsWith("/api/live")) return;
+    ws.on("framereceived", (f) => { try { user.hints.push(JSON.parse(f.payload)); } catch { /* binary */ } });
+  });
   page.on("pageerror", (e) => errors.push(e.message));
   page.on("console", (m) => {
     // A 401 from /api/auth/me on first paint is the expected "not signed in
@@ -113,12 +118,19 @@ await bob.page.getByText(slug, { exact: true }).first().click({ timeout: 30000 }
 await bob.page.getByText(/^epoch \d+$/).waitFor({ timeout: 30000 });
 const REPLY = "reply " + rnd();
 await bob.page.getByPlaceholder(/Encrypted before it leaves/).fill(REPLY);
+await alice.page.waitForTimeout(3000);           // let alice's poll go quiet behind the hint socket
+const sentAt = Date.now();
 await bob.page.getByRole("button", { name: "Send" }).click();
 await bob.page.getByText(REPLY).waitFor({ timeout: 30000 });
 const bubble = alice.page.locator("li", { hasText: REPLY });
 await bubble.waitFor({ timeout: 30000 });
+// The api pushed alice a hint for the new log entry, and with the hint
+// socket up her own poll is 20s — so a fast arrival is the hint's doing.
+const lag = Date.now() - sentAt;
+assert.ok(alice.hints.some((h) => h.t === "log"), "alice should have received a delivery hint");
+assert.ok(lag < 4000, `reply took ${lag}ms to reach alice; delivery hints should make it near-instant`);
 assert.ok((await bubble.innerText()).includes(bob.handle), "alice should see bob's handle on his message");
-console.log("· bob replied; alice sees it attributed to", bob.handle);
+console.log("· bob replied; alice sees it attributed to", bob.handle, `(${lag}ms, via delivery hint)`);
 // The roster lists both members once the epoch has moved.
 await alice.page.getByRole("button", { name: "Members" }).click();
 for (const h of [alice.handle, bob.handle]) {

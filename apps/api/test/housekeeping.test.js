@@ -243,6 +243,39 @@ assert.equal(wb.got.length, 1, "no frames after revocation");
 console.log("· presence socket closed after its session was revoked");
 
 wa.close();
+
+// ------------------------------------------------------- delivery hints
+
+const hintUrl = BASE.replace(/^http/, "ws") + "/api/live";
+const listen = (user, origin = ORIGIN) => new Promise((resolve, reject) => {
+  const ws = new WebSocket(hintUrl, { headers: { ...(user ? { cookie: user.cookie } : {}), ...(origin ? { origin } : {}) } });
+  ws.hints = [];
+  ws.on("message", (d) => ws.hints.push(JSON.parse(d)));
+  ws.on("close", (code) => { ws.closedWith = code; });
+  ws.on("open", () => resolve(ws));
+  ws.on("error", reject);
+});
+
+const anon = await listen(null);
+const alien = await listen(alice, "https://evil.example");
+await sleep(200);
+assert.equal(anon.closedWith, 4401, "hints need a session");
+assert.equal(alien.closedWith, 4403, "hints refuse foreign origins");
+
+// Bob's session was revoked above; give him a fresh one.
+const bob2 = { ...bob, cookie: "dp_session=hk-bob-2" };
+await q("INSERT INTO sessions(user_id, token_hash, expires_at) VALUES ($1,$2, now() + interval '1 hour')",
+  [bob.id, sha256("hk-bob-2")]);
+const hb = await listen(bob2);
+const ho = await listen(outsider);
+await sleep(100);
+const posted = await post({ kind: "application" });
+await sleep(200);
+assert.deepEqual(hb.hints, [{ t: "log", g: gid, s: posted.json.seq }], "a member gets a hint for the new seq");
+assert.equal(ho.hints.length, 0, "a non-member gets nothing");
+hb.close(); ho.close();
+console.log("· delivery hints reach members only, and need a session and our origin");
+
 await q("DELETE FROM users WHERE handle = ANY($1)",
   [["hk_alice", "hk_bob", "hk_expired", "hk_claimant", "hk_outsider", "hk_drainer", "hk_nosy"]]);
 await pool.end();

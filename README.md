@@ -12,7 +12,7 @@ Live at [deadp0et.army](https://deadp0et.army) — console at `/app`.
 
 ```
 apps/api        Fastify + Postgres + Redis. Key directory, ciphertext relay,
-                MLS delivery service, ephemeral presence relay.
+                MLS delivery service, ephemeral presence relay, delivery hints.
 apps/web        The console: passkey auth, encrypted chat, collaborative canvas.
 apps/site       Marketing site (deadp0et.army).
 packages/crypto Isomorphic MLS client — same code in Node and the browser.
@@ -106,6 +106,13 @@ which can never be fetched again.
 removes them: expired sessions and application messages, envelopes a day after
 they are acked, used Welcomes and claimed KeyPackages after a grace period.
 Commits are never swept.
+
+**Delivery is pushed, fetching is not.** Each tab holds one `/api/live`
+socket; when a message lands in one of the user's groups (or a Welcome is
+addressed to one of their devices) the api sends a hint — group and seq,
+which it already knows — and the client fetches. Nothing in a hint is
+trusted, and polling continues every 20s as a fallback, so a lost hint costs
+latency, never data.
 
 **Presence is deliberately outside MLS.** Cursors move at pointer rates;
 routing them through application messages would outrun receivers' skipped-key

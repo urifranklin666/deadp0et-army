@@ -8,8 +8,12 @@ import { ConfirmModal, PromptModal } from "./Modal.jsx";
 import { api } from "./lib/api.js";
 import { store, K } from "./lib/db.js";
 import { GroupSession, SUITE, ensureDevice, login, register } from "./lib/session.js";
+import { Hints } from "./lib/hints.js";
 
 const SYNC_MS = 2500;
+// While the hint socket is up, the api tells us when to fetch; polling only
+// covers a hint that got lost.
+const FALLBACK_MS = 20_000;
 // eslint-disable-next-line no-undef
 const BUILD = typeof __BUILD__ === "string" ? __BUILD__ : "dev";  // set by vite.config.js
 
@@ -166,6 +170,7 @@ function App() {
   const [busy, setBusy] = useState(null);
   const sessions = useRef(new Map());
   const notifiedWelcomes = useRef(new Set());
+  const hints = useRef(null);
   const [modal, setModal] = useState(null);
 
   const bump = useCallback(() => setTick((t) => t + 1), []);
@@ -266,11 +271,23 @@ function App() {
 
   /* ---------------------------------------------------------- background */
 
-  // Poll for pending Welcomes so an invited device joins without a reload.
+  // One hint socket per signed-in tab.
+  useEffect(() => {
+    if (phase !== "ready") return undefined;
+    const h = new Hints();
+    h.connect();
+    hints.current = h;
+    return () => { h.close(); if (hints.current === h) hints.current = null; };
+  }, [phase]);
+
+  // Check for pending Welcomes — on a hint, or on a (slow, if hinted) poll —
+  // so an invited device joins without a reload.
   useEffect(() => {
     if (phase !== "ready" || !deviceId) return;
     let dead = false;
-    const id = setInterval(async () => {
+    let last = 0;
+    const check = async () => {
+      last = Date.now();
       try {
         const { welcomes } = await api.welcomes(deviceId);
         if (dead || !welcomes.length) return;
@@ -298,8 +315,13 @@ function App() {
           setNotice(`Invited to ${pending} group${pending > 1 ? "s" : ""} — open it to join.`);
         }
       } catch { /* transient */ }
+    };
+    const id = setInterval(() => {
+      if (hints.current?.connected && Date.now() - last < FALLBACK_MS) return;
+      check();
     }, SYNC_MS * 2);
-    return () => { dead = true; clearInterval(id); };
+    const off = hints.current?.on((h) => { if (h.t === "welcome") check(); });
+    return () => { dead = true; clearInterval(id); off?.(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, deviceId]);
 
@@ -307,7 +329,9 @@ function App() {
   useEffect(() => {
     if (!active || !active.client) return;
     let dead = false;
+    let last = 0;
     const pull = async () => {
+      last = Date.now();
       try {
         const { applied, removed } = await active.sync();
         if (dead) return;
@@ -325,8 +349,12 @@ function App() {
       }
     };
     pull();
-    const id = setInterval(pull, SYNC_MS);
-    return () => { dead = true; clearInterval(id); };
+    const id = setInterval(() => {
+      if (hints.current?.connected && Date.now() - last < FALLBACK_MS) return;
+      pull();
+    }, SYNC_MS);
+    const off = hints.current?.on((h) => { if (h.t === "log" && h.g === active.groupId) pull(); });
+    return () => { dead = true; clearInterval(id); off?.(); };
     // `active.client` is in the deps so a session that joins while selected
     // (Welcome arrived after it was opened) starts syncing without a reselect.
     // eslint-disable-next-line react-hooks/exhaustive-deps

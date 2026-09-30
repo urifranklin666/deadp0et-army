@@ -8,6 +8,7 @@ import { keyRoutes } from "./routes/keys.js";
 import { messageRoutes } from "./routes/messages.js";
 import { mlsRoutes } from "./routes/mls.js";
 import { liveRoutes } from "./routes/live.js";
+import { notifyRoutes } from "./routes/notify.js";
 import { compactAll } from "./compaction.js";
 import { sweepExpired } from "./retention.js";
 import { challengeBackend, closeChallenges } from "./challenges.js";
@@ -80,6 +81,7 @@ await app.register(keyRoutes);
 await app.register(messageRoutes);
 await app.register(mlsRoutes);
 await app.register(liveRoutes);
+await app.register(notifyRoutes);
 
 // Periodic housekeeping. Compaction is cheap: it only touches groups whose
 // logs have grown, and prunes strictly below the slowest active device. The
