@@ -461,6 +461,29 @@ function App() {
         />
       ) : null}
 
+      {modal?.kind === "leave" ? (
+        <ConfirmModal
+          title={`Leave #${modal.session.channel.slug}`}
+          body="You lose access immediately, and this device forgets the channel's keys and history. Only an invite can bring you back."
+          confirmLabel="Leave"
+          danger
+          onConfirm={async () => {
+            const s = modal.session;
+            try {
+              await s.leave();
+            } catch (e) {
+              setErr(e.message);
+              throw e;
+            }
+            sessions.current.delete(s.channel.id);
+            setChannels((list) => list.filter((c) => c.id !== s.channel.id));
+            setActive((a) => (a === s ? null : a));
+            setNotice(`Left #${s.channel.slug}.`);
+          }}
+          onClose={() => setModal(null)}
+        />
+      ) : null}
+
       {modal?.kind === "clear" ? (
         <ConfirmModal
           title="Clear the board"
@@ -545,6 +568,14 @@ function Members({ session, openModal }) {
               ) : null}
             </li>
           ))}
+          {mine && mine.role !== "owner" && session.client ? (
+            <li className="mt-1 border-t border-white/10 pt-1">
+              <button onClick={() => { setOpen(false); openModal({ kind: "leave", session }); }}
+                className="w-full rounded px-2 py-1.5 text-left text-xs text-slate-400 hover:bg-rose-600/20 hover:text-rose-300">
+                Leave channel
+              </button>
+            </li>
+          ) : null}
         </ul>
       ) : null}
     </div>

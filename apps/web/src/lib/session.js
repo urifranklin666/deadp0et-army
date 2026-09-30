@@ -15,6 +15,10 @@ const SNAPSHOT_EVERY = 25;
 // KeyPackages are single-use: each invite claims one from the server. Keep a
 // small pool published so this device can be added to more than one group,
 // and refill it whenever it runs low.
+// How often an owner/admin client checks the MLS tree against the channel
+// roster, to remove the leaves of members who have left.
+const RECONCILE_MS = 30_000;
+
 const KP_LOW_WATER = 3;
 const KP_TARGET = 8;
 
@@ -411,6 +415,9 @@ export class GroupSession {
       // server has no other way to know a message is safely delivered.
       api.reportCursor(this.groupId, this.deviceId, this.cursor).catch(() => {});
     }
+    // Never recursive: #reconcile's own #drain calls back into #sync, but by
+    // then lastReconcile is fresh and this returns at once.
+    await this.#reconcile().catch(() => {});
     return { applied };
   }
 
@@ -523,6 +530,47 @@ export class GroupSession {
     const res = await this.#commit(
       (client) => client.removeMembers(handle),
       () => ({ removes: [handle] }));
+    return res.removed;
+  }
+
+  /**
+   * Leave the channel: the server ends our access now, and this device
+   * forgets the group's keys and transcript. Our MLS leaf is removed by the
+   * next owner/admin client to reconcile (we cannot commit our own removal).
+   */
+  leave() { return this.#exclusive(() => this.#leave()); }
+
+  async #leave() {
+    await api.leave(this.channel.id);
+    // Only once the server agreed: a refused leave must not drop unsent edits.
+    clearTimeout(this.flushTimer);
+    this.pendingUpdates = [];
+    this.removed = true;
+    this.client = null;
+    this.history = [];
+    for (const key of [K.groupState, K.cursor, K.history, K.ydoc]) {
+      await store.del(key(this.handle, this.groupId));
+    }
+  }
+
+  /**
+   * Owners and admins only: remove from the MLS group anyone the channel
+   * roster no longer lists (they left). Until then a leaver's leaf would keep
+   * receiving the keys for every new epoch. Throttled; failures are left for
+   * the next attempt, and #commit has already rolled back any refused commit.
+   */
+  reconcile() { return this.#exclusive(() => this.#reconcile(true)); }
+
+  async #reconcile(force = false) {
+    if (!this.client || this.removed || !["owner", "admin"].includes(this.channel.role)) return 0;
+    if (!force && Date.now() - (this.lastReconcile || 0) < RECONCILE_MS) return 0;
+    this.lastReconcile = Date.now();
+    const { members } = await api.members(this.channel.id);
+    const roster = new Set(members.map((m) => m.handle));
+    const stale = this.members().filter((h) => h !== this.handle && !roster.has(h));
+    if (!stale.length) return 0;
+    await this.#drain();
+    const res = await this.#commit((client) => client.removeMembers(stale), () => ({ removes: stale }));
     return res.removed;
   }
 

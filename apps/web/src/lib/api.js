@@ -30,6 +30,7 @@ export const api = {
 
   channels: () => call("GET", "/api/channels"),
   createChannel: (slug, kind) => call("POST", "/api/channels", { slug, kind }),
+  leave: (channelId) => call("POST", `/api/channels/${encodeURIComponent(channelId)}/leave`),
   members: (channelId) => call("GET", `/api/channels/${encodeURIComponent(channelId)}/members`),
 
   registerDevice: (name, identity) => call("POST", "/api/mls/devices", { name, identity }),

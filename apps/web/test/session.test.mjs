@@ -257,6 +257,30 @@ await assert.rejects(Cs.client.apply(new Uint8Array(after.payload)),
   "a removed member must not decrypt anything sent after the removal");
 console.log("· owner removed carol: access revoked, and later messages are unreadable to her");
 
+// ----------------------------------------------------- leaving + reconcile
+
+// Bob leaves the second room. His access ends and his device forgets it...
+as(bob);
+const { A: A2, B: B2 } = second;
+await B2.leave();
+assert.equal(B2.client, null);
+assert.equal(await store.get(K.groupState(bob.handle, A2.groupId)), undefined,
+  "leaving should wipe the group's keys from this device");
+const bobIn = await q(
+  "SELECT 1 FROM channel_members WHERE channel_id=$1 AND user_id=$2", [A2.channel.id, bob.id]);
+assert.equal(bobIn.rowCount, 0, "leaving should end channel membership");
+
+// ...but his MLS leaf is still in the tree until an owner reconciles.
+as(alice);
+assert.ok(A2.members().includes(bob.handle));
+assert.equal(await A2.reconcile(), 1, "the owner's client should remove the leaver's leaf");
+assert.ok(!A2.members().includes(bob.handle), "bob's leaf should be gone after reconcile");
+assert.equal(await A2.reconcile(), 0, "nothing left to reconcile");
+
+// The owner cannot leave their own channel.
+await assert.rejects(A2.leave(), /owner cannot leave/);
+console.log("· leaving ends access and wipes local keys; the owner's client prunes the leaf");
+
 await settle();                                     // let fire-and-forget cursor reports land
 await q("DELETE FROM users WHERE handle = ANY($1)", [["sess_alice", "sess_bob", "sess_carol", "sess_dave", "sess_mallory"]]);
 await pool.end();

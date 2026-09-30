@@ -86,6 +86,11 @@ cursors and pending Welcomes in that transaction. The server cannot check that
 the opaque commit really removes who it names, which is why only owners and
 admins may send one.
 
+Leaving works the other way round. A member cannot commit its own removal, so
+`leave` ends their server access and wipes the group from their device, and
+the next owner/admin client to reconcile the MLS tree against the channel
+roster commits the removal of the leftover leaf.
+
 **Messages are attributed by credential.** The sender shown on a message is
 the credential of the MLS leaf that signed it, not anything the server says.
 Since anyone can write any identity into their own KeyPackage, an inviter

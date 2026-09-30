@@ -29,7 +29,7 @@ export async function messageRoutes(app) {
       return rows[0];
     });
     if (!ch) return reply.code(409).send({ error: "slug taken" });
-    return ch;
+    return { ...ch, role: "owner" };   // same shape as GET /api/channels
   });
 
   app.get("/api/channels", { preHandler: requireSession }, async (req) => {
@@ -45,6 +45,29 @@ export async function messageRoutes(app) {
         WHERE m.user_id = $1
         ORDER BY c.created_at DESC`, [req.user.id]);
     return { channels: rows.map((r) => ({ ...r, epoch: r.epoch === null ? null : Number(r.epoch) })) };
+  });
+
+  // Leave a channel. Access to its ciphertext ends now; the MLS leaf is
+  // removed by the next owner/admin client that reconciles the group against
+  // this roster (a member cannot commit its own removal).
+  app.post("/api/channels/:id/leave", { preHandler: requireSession }, async (req, reply) => {
+    const out = await tx(async (c) => {
+      const { rows } = await c.query(
+        "SELECT role FROM channel_members WHERE channel_id=$1 AND user_id=$2 FOR UPDATE",
+        [req.params.id, req.user.id]);
+      if (!rows.length) return 404;
+      if (rows[0].role === "owner") return 409;
+      await c.query("DELETE FROM channel_members WHERE channel_id=$1 AND user_id=$2",
+        [req.params.id, req.user.id]);
+      await c.query(
+        `DELETE FROM mls_device_cursors WHERE device_id IN (SELECT id FROM devices WHERE user_id=$2)
+            AND group_id IN (SELECT group_id FROM mls_groups WHERE channel_id=$1)`,
+        [req.params.id, req.user.id]);
+      return 200;
+    });
+    if (out === 404) return reply.code(404).send({ error: "not a member" });
+    if (out === 409) return reply.code(409).send({ error: "the owner cannot leave their own channel" });
+    return { ok: true };
   });
 
   // Who is in a channel. Members only — the roster is itself sensitive.

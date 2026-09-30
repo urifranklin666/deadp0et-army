@@ -317,14 +317,21 @@ export async function mlsRoutes(app) {
             [g.group_id, w.deviceId, seq]);
         }
         for (const handle of drops) {
-          const { rows: gone } = await c.query(
-            `DELETE FROM channel_members m USING users u
-              WHERE m.channel_id = $1 AND m.user_id = u.id AND u.handle = $2 AND m.role <> 'owner'
-          RETURNING m.user_id`, [g.channel_id, handle]);
-          if (!gone.length) {
-            throw Object.assign(new Error(`${handle} is not a removable member of this channel`),
-              { statusCode: 400 });
+          const { rows: [target] } = await c.query(
+            `SELECT u.id, m.role FROM users u
+               LEFT JOIN channel_members m ON m.user_id = u.id AND m.channel_id = $1
+              WHERE u.handle = $2`, [g.channel_id, handle]);
+          if (!target) throw Object.assign(new Error(`no such user ${handle}`), { statusCode: 400 });
+          if (target.role === "owner") {
+            throw Object.assign(new Error("an owner cannot be removed"), { statusCode: 400 });
           }
+          // Someone who already left is still in the MLS tree until a commit
+          // removes their leaf; that commit is legitimate and revokes nothing.
+          if (target.role) {
+            await c.query("DELETE FROM channel_members WHERE channel_id=$1 AND user_id=$2",
+              [g.channel_id, target.id]);
+          }
+          const gone = [{ user_id: target.id }];
           // Their devices stop pinning compaction and lose any pending join.
           await c.query(
             `DELETE FROM mls_device_cursors

@@ -177,15 +177,16 @@ export class MlsClient {
   }
 
   /**
-   * Commit the removal of every leaf whose credential names `identity` (one
-   * per device). The removed members never learn the next epoch's secrets,
+   * Commit the removal of every leaf whose credential names `identity` — a
+   * handle, or an array of them (one leaf per device). The removed members never learn the next epoch's secrets,
    * so nothing sent after this commit is readable to them. As with adds, the
    * caller must submit the commit at the epoch it was built against.
    */
   async removeMembers(identity) {
+    const wanted = new Set([].concat(identity));
     const own = this.#state.privatePath?.leafIndex;
-    const leaves = this.members().filter((m) => m.identity === identity && m.leafIndex !== own);
-    if (!leaves.length) throw new Error(`${identity} is not in this group`);
+    const leaves = this.members().filter((m) => wanted.has(m.identity) && m.leafIndex !== own);
+    if (!leaves.length) throw new Error(`${[...wanted].join(", ")} is not in this group`);
     const builtAtEpoch = this.epoch;
     const res = await createCommit(
       { state: this.#state, cipherSuite: this.#cs },
