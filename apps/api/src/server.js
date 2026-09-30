@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
 import rateLimit from "@fastify/rate-limit";
@@ -36,12 +39,27 @@ app.addHook("onSend", async (req, reply, payload) => {
   return payload;
 });
 
+// Migrations on disk that the database hasn't applied. A deploy that forgot
+// `pnpm migrate` would otherwise fail later, on whichever query first needs
+// a new column; this makes it visible at the health check instead.
+const MIGRATIONS = fs.readdirSync(
+  path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../migrations"))
+  .filter((f) => f.endsWith(".sql")).sort();
+
+async function pendingMigrations() {
+  const { rows } = await q("SELECT name FROM schema_migrations");
+  const applied = new Set(rows.map((r) => r.name));
+  return MIGRATIONS.filter((f) => !applied.has(f));
+}
+
 app.get("/api/health", async () => {
   const started = Date.now();
   const db = await q("SELECT 1 AS ok").then(() => "up").catch(() => "down");
+  const pending = db === "up" ? await pendingMigrations().catch(() => null) : null;
   return {
-    status: db === "up" ? "ok" : "degraded",
+    status: db === "up" && pending?.length === 0 ? "ok" : "degraded",
     db,
+    ...(pending?.length ? { pending_migrations: pending } : {}),
     uptime_s: Math.round(process.uptime()),
     latency_ms: Date.now() - started,
   };
@@ -103,6 +121,15 @@ const close = async () => {
 };
 process.on("SIGTERM", close);
 process.on("SIGINT", close);
+
+// Passkeys are bound to RP_ID/RP_ORIGIN; the localhost fallbacks in auth.js
+// are for development and would make every production login fail.
+for (const key of ["RP_ID", "RP_ORIGIN", "SESSION_SECRET"]) {
+  if (!process.env[key]) app.log.warn(`${key} is not set; using a development default`);
+}
+pendingMigrations()
+  .then((p) => { if (p.length) app.log.warn({ pending: p }, "database is missing migrations; run `pnpm migrate`"); })
+  .catch(() => {});
 
 const port = Number(process.env.PORT || 8790);
 await app.listen({ port, host: "127.0.0.1" });

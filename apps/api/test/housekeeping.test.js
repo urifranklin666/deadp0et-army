@@ -59,6 +59,20 @@ const gidBytes = crypto.randomBytes(16);
 const gid = gidBytes.toString("base64");
 await api(alice, "POST", "/api/mls/groups", { channelId: ch.id, groupId: gid, ciphersuite: "test" });
 
+// ----------------------------------------------------------------- health
+
+const health = await (await fetch(`${BASE}/api/health`)).json();
+assert.equal(health.status, "ok", "a fully migrated database reports ok");
+await q("DELETE FROM schema_migrations WHERE name = '005_kp_claims.sql'");
+try {
+  const behind = await (await fetch(`${BASE}/api/health`)).json();
+  assert.equal(behind.status, "degraded");
+  assert.deepEqual(behind.pending_migrations, ["005_kp_claims.sql"], "health should name the missing migration");
+} finally {
+  await q("INSERT INTO schema_migrations(name) VALUES ('005_kp_claims.sql') ON CONFLICT DO NOTHING");
+}
+console.log("· health reports pending migrations as degraded");
+
 // ------------------------------------------------- malformed ids are 4xx
 
 for (const path of [
