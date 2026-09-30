@@ -48,6 +48,8 @@ async function withStore(mode, fn) {
 
 export const store = {
   get: (key) => withStore("readonly", (s) => s.get(key)),
+  /** Several keys read in one transaction, so they're from one moment. */
+  getMany: async (keys) => (await withStore("readonly", (s) => keys.map((k) => s.get(k)))).map((r) => r.result),
   set: (key, value) => withStore("readwrite", (s) => s.put(value, key)),
   del: (key) => withStore("readwrite", (s) => s.delete(key)),
   clear: () => withStore("readwrite", (s) => s.clear()),
@@ -55,9 +57,13 @@ export const store = {
    * Write several keys in ONE transaction: all land or none do. Group state,
    * cursor and transcript must move together — a ratchet that advanced
    * without its cursor re-fetches messages it can no longer decrypt, and
-   * their plaintext is gone for good.
+   * their plaintext is gone for good. `deletes` are removed in the same
+   * transaction.
    */
-  setMany: (entries) => withStore("readwrite", (s) => { for (const [k, v] of entries) s.put(v, k); }),
+  setMany: (entries, deletes = []) => withStore("readwrite", (s) => {
+    for (const [k, v] of entries) s.put(v, k);
+    for (const k of deletes) s.delete(k);
+  }),
   delMany: (keys) => withStore("readwrite", (s) => { for (const k of keys) s.delete(k); }),
   /** Delete every key `match(key)` accepts, in one transaction. */
   deleteWhere: async (match) => {
@@ -80,7 +86,8 @@ export const K = {
   keyPackagePool: (handle) => `kps:${handle}`,   // ref(b64) -> exported KeyPackage
   groupState: (handle, groupId) => `gs:${handle}:${groupId}`,
   cursor: (handle, groupId) => `cur:${handle}:${groupId}`,
-  history: (handle, groupId) => `hist:${handle}:${groupId}`,
+  history: (handle, groupId) => `hist:${handle}:${groupId}`,        // { chunks } (or, before chunking, the whole array)
+  historyChunk: (handle, groupId, i) => `hist:${handle}:${groupId}:${i}`,
   ydoc: (handle, groupId) => `ydoc:${handle}:${groupId}`,
   pendingCommit: (handle, groupId) => `pc:${handle}:${groupId}`,   // { before, epoch, since } while a commit is in flight
   leafRegistered: (handle, groupId) => `lr:${handle}:${groupId}`,  // this device's leaf key is in the directory

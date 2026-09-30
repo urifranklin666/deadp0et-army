@@ -31,7 +31,8 @@ const SITE = `http://localhost:${SITE_PORT}`;
 
 const SUITES = browser
   ? ["apps/web/test/e2e.mjs", "apps/web/test/canvas.mjs", "apps/web/test/presence.mjs",
-     "apps/web/test/mobile.mjs", "apps/web/test/multidevice.mjs", "apps/site/test/funnel.mjs"]
+     "apps/web/test/mobile.mjs", "apps/web/test/multidevice.mjs", "apps/web/test/notifications.mjs",
+     "apps/site/test/funnel.mjs"]
   : [
       "apps/api/test/mls.spike.js",
       "packages/crypto/test/membership.test.js",
@@ -39,6 +40,7 @@ const SUITES = browser
       "apps/api/test/mls.api.test.js",
       "apps/api/test/compaction.test.js",
       "apps/api/test/housekeeping.test.js",
+      "apps/api/test/cluster.test.js",
       "apps/web/test/session.test.mjs",
     ];
 

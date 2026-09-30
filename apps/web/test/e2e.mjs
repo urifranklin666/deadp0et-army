@@ -56,6 +56,25 @@ async function newUser(browser, handle) {
 }
 
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
+
+// The passkey screen must not wait on the MLS stack: with that chunk
+// unreachable it still paints. (Production build only; the dev server
+// doesn't chunk.)
+{
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  let blocked = 0;
+  await page.route(/\/assets\/session-[^/]*\.js$/, (r) => { blocked++; return r.abort(); });
+  await page.goto(APP, { waitUntil: "domcontentloaded", timeout: 60000 });
+  await page.getByRole("button", { name: "Create passkey" }).waitFor({ timeout: 30000 });
+  const built = await page.evaluate(() => !!document.querySelector('meta[http-equiv="Content-Security-Policy"]'));
+  if (built) {
+    assert.ok(blocked > 0, "the production build should fetch the MLS stack as its own chunk");
+    console.log("· the sign-in screen paints without the MLS chunk");
+  }
+  await context.close();
+}
+
 const alice = await newUser(browser, "web_a_" + rnd());
 console.log("· alice registered a passkey and booted:", alice.handle);
 

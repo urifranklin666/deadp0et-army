@@ -1,6 +1,7 @@
 import { q } from "../db.js";
 import { RECHECK_MS, RP_ORIGIN } from "../config.js";
 import { sessionUser } from "../sessions.js";
+import { publish, subscribe, busBackend } from "../bus.js";
 
 /**
  * Delivery hints: "group G has something new at seq S".
@@ -13,11 +14,12 @@ import { sessionUser } from "../sessions.js";
  * says "fetch now". Clients keep a slow poll as a fallback, so a lost hint
  * costs latency, never data.
  *
- * In-process, like the presence relay: fine for one api node. More nodes
- * would fan hints out over Redis pub/sub.
+ * Sockets live in whichever api node accepted them, so hints travel over
+ * the bus (bus.js): one topic per user, which a node subscribes to only
+ * while it holds one of that user's sockets.
  */
 
-const subscribers = new Map();          // userId -> Set<socket>
+const subscribers = new Map();          // userId -> Set<socket>, on this node
 const MAX_SOCKETS_PER_USER = 8;         // tabs
 
 // Who is in a group, briefly cached: every message posted would otherwise
@@ -39,19 +41,24 @@ async function groupMembers(groupId) {
   return ids;
 }
 
+// Every node caches membership, so a change made at one must reach them all.
+subscribe("members", (data) => {
+  const key = data.toString();
+  if (key === "*") memberCache.clear();
+  else memberCache.delete(key);
+});
+
 /** Call when a group's membership changes (no argument: forget them all). */
 export function invalidateMembers(groupId) {
-  if (groupId === undefined) memberCache.clear();
-  else memberCache.delete(Buffer.from(groupId).toString("hex"));
+  publish("members", groupId === undefined ? "*" : Buffer.from(groupId).toString("hex"));
 }
+
+// With one node and nobody listening, there's no one to tell: skip the query.
+const nobodyListening = () => !subscribers.size && busBackend() === "memory";
 
 function send(userIds, hint) {
   const frame = JSON.stringify(hint);
-  for (const id of userIds) {
-    for (const socket of subscribers.get(id) || []) {
-      if (socket.readyState === 1) socket.send(frame);
-    }
-  }
+  for (const id of userIds) publish("user:" + id, frame);
 }
 
 /**
@@ -60,7 +67,7 @@ function send(userIds, hint) {
  * they learn it now rather than at their next fallback poll.
  */
 export async function hintGroup(groupId, seq, alsoUserIds = []) {
-  if (!subscribers.size) return;
+  if (nobodyListening()) return;
   const members = await groupMembers(groupId);
   send(new Set([...members, ...alsoUserIds]),
     { t: "log", g: Buffer.from(groupId).toString("base64"), s: seq });
@@ -68,7 +75,7 @@ export async function hintGroup(groupId, seq, alsoUserIds = []) {
 
 /** Welcomes were addressed to these devices: hint their owners. */
 export async function hintWelcome(deviceIds) {
-  if (!subscribers.size || !deviceIds.length) return;
+  if (nobodyListening() || !deviceIds.length) return;
   const { rows } = await q("SELECT DISTINCT user_id FROM devices WHERE id = ANY($1::uuid[])", [deviceIds]);
   send(rows.map((r) => r.user_id), { t: "welcome" });
 }
@@ -100,7 +107,15 @@ export async function notifyRoutes(app) {
 
     let set = subscribers.get(user.id);
     if (set && set.size >= MAX_SOCKETS_PER_USER) { socket.close(4429, "too many connections"); return; }
-    if (!set) { set = new Set(); subscribers.set(user.id, set); }
+    if (!set) {
+      set = new Set();
+      subscribers.set(user.id, set);
+      // Deliver this user's hints, from any node, to their sockets here.
+      set.off = subscribe("user:" + user.id, (frame) => {
+        const text = frame.toString();
+        for (const s of set) if (s.readyState === 1) s.send(text);
+      });
+    }
     set.add(socket);
 
     // A logged-out session stops getting hints within RECHECK_MS.
@@ -113,7 +128,10 @@ export async function notifyRoutes(app) {
     drop = () => {
       clearInterval(recheck);
       set.delete(socket);
-      if (!set.size && subscribers.get(user.id) === set) subscribers.delete(user.id);
+      if (!set.size && subscribers.get(user.id) === set) {
+        subscribers.delete(user.id);
+        set.off();
+      }
     };
   });
 }

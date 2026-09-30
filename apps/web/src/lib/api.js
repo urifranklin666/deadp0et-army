@@ -29,6 +29,8 @@ export const api = {
   logout: () => call("POST", "/api/auth/logout"),
   logoutAll: () => call("POST", "/api/auth/logout-all"),
   deleteAccount: () => call("POST", "/api/auth/delete"),
+  sessions: () => call("GET", "/api/auth/sessions"),
+  revokeSession: (id) => call("POST", `/api/auth/sessions/${encodeURIComponent(id)}/revoke`),
   passkeys: () => call("GET", "/api/auth/passkeys"),
   removePasskey: (id) => call("POST", `/api/auth/passkeys/${encodeURIComponent(id)}/remove`),
 

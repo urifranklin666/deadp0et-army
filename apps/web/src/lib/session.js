@@ -1,11 +1,13 @@
 import * as Y from "yjs";
-import { startRegistration, startAuthentication } from "@simplewebauthn/browser";
 import { MlsClient, SUITE, b64, unb64, keyPackageIdentity } from "@deadp0et/crypto/mls";
 import { api } from "./api.js";
 import { store, K } from "./db.js";
 import { T, decodeEnvelope, encodeEnvelope } from "./envelope.js";
 
 export { SUITE };
+// Kept importable from here; they live apart so the sign-in screen can load
+// without the MLS stack.
+export { register, login, withReauth, addPasskey } from "./passkeys.js";
 
 // Republish the whole board every N canvas messages. Low enough that a device
 // which falls behind has a recent self-contained state to start from, high
@@ -23,18 +25,6 @@ const KP_LOW_WATER = 3;
 const KP_TARGET = 8;
 
 /* --------------------------------------------------------------- identity */
-
-export async function register(handle) {
-  const { userId, options } = await api.post("/api/auth/register/start", { handle });
-  const attResp = await startRegistration({ optionsJSON: options });
-  return api.post("/api/auth/register/finish", { userId, response: attResp });
-}
-
-export async function login(handle) {
-  const { options } = await api.post("/api/auth/login/start", { handle });
-  const assertion = await startAuthentication({ optionsJSON: options });
-  return api.post("/api/auth/login/finish", { response: assertion, challenge: options.challenge });
-}
 
 /**
  * Signature key (base64) -> the handle whose authenticated upload registered
@@ -60,37 +50,6 @@ async function ownersOf(keys) {
     }
   }
   return keyOwners;
-}
-
-/**
- * Run `fn`; if the server wants a fresh passkey proof first (it does for
- * passkey changes and account deletion), do the step-up ceremony and retry
- * once. Within the server's window, later sensitive calls don't prompt again.
- */
-export async function withReauth(fn) {
-  const stepUp = async () => {
-    const { options } = await api.post("/api/auth/reauth/start", {});
-    const assertion = await startAuthentication({ optionsJSON: options });
-    await api.post("/api/auth/reauth/finish", { response: assertion });
-  };
-  if (!(await api.get("/api/auth/reauth").catch(() => ({ recent: false }))).recent) await stepUp();
-  try {
-    return await fn();
-  } catch (e) {
-    // The proof lapsed between the check and the call: once more.
-    if (e.status !== 403 || e.message !== "reauth_required") throw e;
-    await stepUp();
-    return fn();
-  }
-}
-
-/** Register another passkey for the signed-in account (a backup). */
-export function addPasskey() {
-  return withReauth(async () => {
-    const { options } = await api.post("/api/auth/passkeys/start", {});
-    const attResp = await startRegistration({ optionsJSON: options });
-    return api.post("/api/auth/passkeys/finish", { response: attResp });
-  });
 }
 
 /**
@@ -195,6 +154,11 @@ async function sha256(bytes) {
 
 /* ------------------------------------------------------------ group session */
 
+// The transcript is stored in chunks of this many entries, and a save writes
+// only the chunks that changed. As one array, every message re-wrote the
+// channel's whole history to IndexedDB — fine at 50 entries, not at 50,000.
+const HISTORY_CHUNK = 250;
+
 /**
  * One MLS group, kept in sync with the server log.
  *
@@ -288,12 +252,53 @@ export class GroupSession {
   /** One atomic write: see store.setMany for why these can't be separate. */
   async #persist() {
     const state = this.client.exportState();
+    const hist = this.#historyWrites();
     await store.setMany([
       ...(state ? [[K.groupState(this.handle, this.groupId), state]] : []),
       [K.cursor(this.handle, this.groupId), this.cursor],
-      [K.history(this.handle, this.groupId), this.history],
+      ...hist.puts,
       [K.ydoc(this.handle, this.groupId), Y.encodeStateAsUpdate(this.doc)],
-    ]);
+    ], hist.deletes);
+    hist.saved();
+  }
+
+  // Each stored chunk's JSON as last written, to tell which ones changed.
+  // Comparing contents rather than tracking edits catches every kind of
+  // change — appends, the re-sort after a sync, late attribution of old
+  // entries — for the cost of serialising in memory, not writing to disk.
+  #savedChunks = [];
+
+  /** The puts and deletes that bring the stored transcript up to date. */
+  #historyWrites() {
+    const puts = [];
+    const next = [];
+    for (let i = 0; i * HISTORY_CHUNK < this.history.length; i++) {
+      const chunk = this.history.slice(i * HISTORY_CHUNK, (i + 1) * HISTORY_CHUNK);
+      const json = JSON.stringify(chunk);
+      next.push(json);
+      if (json !== this.#savedChunks[i]) puts.push([K.historyChunk(this.handle, this.groupId, i), chunk]);
+    }
+    puts.push([K.history(this.handle, this.groupId), { chunks: next.length }]);
+    const deletes = [];
+    for (let i = next.length; i < this.#savedChunks.length; i++) {
+      deletes.push(K.historyChunk(this.handle, this.groupId, i));
+    }
+    return { puts, deletes, saved: () => { this.#savedChunks = next; } };
+  }
+
+  async #loadHistory() {
+    const index = await store.get(K.history(this.handle, this.groupId));
+    if (Array.isArray(index)) {
+      // Stored before chunking: rewritten as chunks at the next save.
+      this.history = index;
+      this.#savedChunks = [];
+      return;
+    }
+    const n = index?.chunks || 0;
+    const chunks = n ? await store.getMany(
+      Array.from({ length: n }, (_, i) => K.historyChunk(this.handle, this.groupId, i))) : [];
+    this.history = chunks.flatMap((c) => c || []);
+    this.#savedChunks = chunks.map((c) => JSON.stringify(c || []));
   }
 
   async #restoreDoc() {
@@ -331,7 +336,7 @@ export class GroupSession {
       const state = await store.get(K.groupState(this.handle, groupIdB64));
       if (!state) return false;              // known group, but not joined on this device
       this.cursor = (await store.get(K.cursor(this.handle, groupIdB64))) || 0;
-      this.history = (await store.get(K.history(this.handle, groupIdB64))) || [];
+      await this.#loadHistory();
       this.client = await MlsClient.restore(this.handle, { keyPackage: kp, state });
       try {
         await this.#settlePendingCommit();
@@ -763,7 +768,9 @@ export class GroupSession {
     this.client = null;
     this.cursor = 0;
     await store.delMany([K.groupState, K.cursor, K.history, K.ydoc, K.pendingCommit]
-      .map((key) => key(this.handle, this.groupId)));
+      .map((key) => key(this.handle, this.groupId))
+      .concat(this.#savedChunks.map((_, i) => K.historyChunk(this.handle, this.groupId, i))));
+    this.#savedChunks = [];
   }
 
   /**

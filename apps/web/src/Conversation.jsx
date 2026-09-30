@@ -114,11 +114,19 @@ function Members({ session, openModal, onError }) {
   );
 }
 
+const PAGE = 200;
+
 export default function Conversation({ session, onError, onChange, openModal, onBack }) {
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(null);
   const [mode, setMode] = useState(session.channel.kind === "canvas" ? "canvas" : "chat");
   const endRef = useRef(null);
+  // Render only the latest messages: every sync re-renders this list, and a
+  // long-lived channel's full history would make each new message cost a
+  // render of thousands of rows. Older ones are a click away.
+  const [shown, setShown] = useState(PAGE);
+  const hidden = Math.max(0, session.history.length - shown);
+  const visible = hidden ? session.history.slice(hidden) : session.history;
 
   useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [session.history.length]);
 
@@ -188,8 +196,19 @@ export default function Conversation({ session, onError, onChange, openModal, on
           </p>
         ) : (
           <ul className="space-y-2">
-            {session.history.map((m) => (
-              <li key={m.seq} className="animate-[dp-rise_0.25s_ease-out_both]">
+            {hidden ? (
+              <li className="text-center">
+                <button onClick={() => setShown((n) => n + PAGE)}
+                  className="rounded-md border border-white/10 px-3 py-1 text-[11px] text-slate-400 hover:text-white">
+                  Show {Math.min(PAGE, hidden)} earlier message{Math.min(PAGE, hidden) === 1 ? "" : "s"}
+                </button>
+              </li>
+            ) : null}
+            {visible.map((m, i) => (
+              // seq alone isn't unique: notices reuse the seq of the message
+              // they follow.
+              <li key={`${m.seq}:${m.notice ? "n" : m.audit ? "a" : m.error ? "e" : "m"}:${hidden + i}`}
+                className="animate-[dp-rise_0.25s_ease-out_both]">
                 {m.audit ? (
                   <div className="flex items-start gap-2 rounded-lg border border-amber-500/25 bg-amber-950/20 px-3 py-2 text-[11px] text-amber-200">
                     <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />

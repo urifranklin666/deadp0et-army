@@ -14,6 +14,7 @@ import { notifyRoutes } from "./routes/notify.js";
 import { compactAll } from "./compaction.js";
 import { sweepExpired } from "./retention.js";
 import { challengeBackend, closeChallenges } from "./challenges.js";
+import { busBackend, closeBus } from "./bus.js";
 
 const app = Fastify({
   logger: { level: process.env.LOG_LEVEL || "info" },
@@ -118,6 +119,7 @@ const shutdown = async () => {
   await app.close();
   await pool.end();
   await closeChallenges();
+  await closeBus();
   process.exit(0);
 };
 process.on("SIGTERM", close);
@@ -160,6 +162,6 @@ async function backfillSignatureKeys() {
 
 const port = Number(process.env.PORT || 8790);
 await app.listen({ port, host: "127.0.0.1" });
-app.log.info(`api listening on 127.0.0.1:${port} (challenges: ${challengeBackend()})`);
+app.log.info(`api listening on 127.0.0.1:${port} (challenges: ${challengeBackend()}, fan-out: ${busBackend()})`);
 
 export { requireSession };

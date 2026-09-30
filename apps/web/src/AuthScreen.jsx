@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Fingerprint, KeyRound, Skull } from "lucide-react";
 import { Banner, Button, Glass } from "./ui.jsx";
-import { login, register } from "./lib/session.js";
+import { login, register } from "./lib/passkeys.js";
 
 /* ------------------------------------------------------------- auth gate */
 

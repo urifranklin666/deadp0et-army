@@ -1,5 +1,6 @@
 import { q } from "../db.js";
 import { RECHECK_MS, RP_ORIGIN, sha256 } from "../config.js";
+import { publish, subscribe } from "../bus.js";
 
 /**
  * Ephemeral presence relay.
@@ -12,9 +13,14 @@ import { RECHECK_MS, RP_ORIGIN, sha256 } from "../config.js";
  * That separation is the whole point: cursors move at pointer-event rates,
  * and putting them in the ordered log would grow it without bound and burn
  * ratchet generations faster than receivers keep skipped keys.
+ *
+ * Members may be connected to different api nodes, so frames cross the bus
+ * (bus.js) on a topic per group, subscribed while this node holds a socket
+ * in it. Limits below are per node: a client could hold a few sockets on
+ * each, which still bounds what one user can amplify.
  */
 
-const rooms = new Map();          // groupId(b64) -> Set<socket>
+const rooms = new Map();          // groupId(b64) -> Set<socket>, on this node
 const MAX_FRAME = 4096;           // a cursor packet is ~60 bytes
 const MAX_PER_SEC = 40;           // generous for 20Hz, cheap to enforce
 const MAX_SOCKETS_PER_USER = 4;   // per group: a few tabs, not a fan-out amplifier
@@ -28,7 +34,16 @@ function held(groupId, userId) {
 
 function join(groupId, socket) {
   let set = rooms.get(groupId);
-  if (!set) { set = new Set(); rooms.set(groupId, set); }
+  if (!set) {
+    set = new Set();
+    rooms.set(groupId, set);
+    // Frames from any node, to every socket here but the one that sent it.
+    set.off = subscribe("room:" + groupId, (data, from) => {
+      for (const peer of set) {
+        if (peer !== from && peer.readyState === 1) peer.send(data, { binary: true });
+      }
+    });
+  }
   set.add(socket);
   return set;
 }
@@ -37,7 +52,10 @@ function leave(groupId, socket) {
   const set = rooms.get(groupId);
   if (!set) return;
   set.delete(socket);
-  if (!set.size) rooms.delete(groupId);
+  if (!set.size) {
+    rooms.delete(groupId);
+    set.off();
+  }
 }
 
 /**
@@ -93,6 +111,7 @@ export async function liveRoutes(app) {
 
     const peers = join(groupId, socket);
     req.log.info({ groupId, peers: peers.size }, "presence: joined");
+    const topic = "room:" + groupId;
 
     let windowStart = Date.now();
     let framesThisWindow = 0;
@@ -104,10 +123,7 @@ export async function liveRoutes(app) {
       if (now - windowStart > 1000) { windowStart = now; framesThisWindow = 0; }
       if (++framesThisWindow > MAX_PER_SEC) return;   // drop, don't disconnect
 
-      for (const peer of peers) {
-        if (peer === socket) continue;
-        if (peer.readyState === 1) peer.send(data, { binary: true });
-      }
+      publish(topic, Buffer.isBuffer(data) ? data : Buffer.from(data), socket);
     });
 
     const recheck = setInterval(async () => {

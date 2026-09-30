@@ -2,20 +2,29 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Hash, Loader2, LogOut, Plus, Skull } from "lucide-react";
 import AuthScreen from "./AuthScreen.jsx";
 import PasskeysModal from "./Passkeys.jsx";
+import SessionsModal from "./Sessions.jsx";
 import Conversation, { EmptyState } from "./Conversation.jsx";
 import { ChoiceModal, ConfirmModal, PromptModal } from "./Modal.jsx";
 import { Banner } from "./ui.jsx";
 import { api } from "./lib/api.js";
 import { belongsTo, store } from "./lib/db.js";
-import { GroupSession, SUITE, ensureDevice, withReauth } from "./lib/session.js";
+import { withReauth } from "./lib/passkeys.js";
 import { Hints } from "./lib/hints.js";
 import { claimTab } from "./lib/tablock.js";
+import { notify, notificationsOn, setNotifications } from "./lib/notifications.js";
 
 const SYNC_MS = 2500;
 // While the hint socket is up, the api tells us when to fetch; polling only
 // covers a hint that got lost.
 const FALLBACK_MS = 20_000;
 const BUILD = typeof __BUILD__ === "string" ? __BUILD__ : "dev";  // set by vite.config.js
+
+// The MLS stack is most of the bundle and nothing before sign-in needs it:
+// start fetching it now, in parallel, and let the passkey screen paint first.
+// A failed fetch is retried the next time it's needed.
+let sessionModule = null;
+const loadSession = () => (sessionModule ??= import("./lib/session.js").catch((e) => { sessionModule = null; throw e; }));
+loadSession().catch(() => {});
 
 /* -------------------------------------------------------------- main app */
 
@@ -35,7 +44,11 @@ function App() {
   const [unread, setUnread] = useState(() => new Set());   // groupIds with news we haven't opened
   const activeRef = useRef(null);
   activeRef.current = active;
+  const channelsRef = useRef([]);
+  channelsRef.current = channels;
+  const [notifyOn, setNotifyOn] = useState(() => notificationsOn());
   const [modal, setModal] = useState(null);
+  const mls = useRef(null);                       // lib/session.js, once loaded
 
   const bump = useCallback(() => setTick((t) => t + 1), []);
 
@@ -59,7 +72,8 @@ function App() {
     setHandle(h);
     // Before touching any key material: another tab may already be using it.
     if (!(await claimTab(h))) { setPhase("elsewhere"); return; }
-    const { deviceId: id } = await ensureDevice(h);
+    mls.current = await loadSession();
+    const { deviceId: id } = await mls.current.ensureDevice(h);
     setDeviceId(id);
     const { channels: list } = await api.channels();
     setChannels(list);
@@ -90,7 +104,7 @@ function App() {
     // rather than leaving the channel stuck until a reload.
     if (!s || !s.client) {
       if (!s) {
-        s = new GroupSession(handle, deviceId, ch);
+        s = new mls.current.GroupSession(handle, deviceId, ch);
         sessions.current.set(ch.id, s);
       }
       try {
@@ -122,7 +136,7 @@ function App() {
     setErr(null);
     try {
       const ch = await api.createChannel(slug.trim().toLowerCase(), "chat");
-      const s = new GroupSession(handle, deviceId, ch);
+      const s = new mls.current.GroupSession(handle, deviceId, ch);
       await s.open(null);                       // founds the MLS group
       sessions.current.set(ch.id, s);
       const withGroup = { ...ch, groupId: s.groupId };
@@ -147,6 +161,9 @@ function App() {
     h.on((hint) => {
       if (hint.t !== "log" || hint.g === activeRef.current?.groupId) return;
       setUnread((u) => (u.has(hint.g) ? u : new Set(u).add(hint.g)));
+      // Not decrypted yet (it isn't the open channel), so all we can say is where.
+      const ch = channelsRef.current.find((c) => c.groupId === hint.g);
+      if (ch) notify(`ch:${ch.id}`, "DEADP0ET.ARMY", `New activity in #${ch.slug}`);
     });
     return () => { h.close(); if (hints.current === h) hints.current = null; };
   }, [phase]);
@@ -237,7 +254,17 @@ function App() {
           bump();
           return;
         }
-        if (applied) bump();
+        if (applied) {
+          bump();
+          // New messages from others, while the tab is in the background:
+          // who and where, never what.
+          const fresh = active.history.slice(-applied).filter((m) => m.text !== undefined && !m.mine);
+          const last = fresh[fresh.length - 1];
+          if (last) {
+            notify(`ch:${active.channel.id}`, `#${active.channel.slug}`,
+              `${fresh.length > 1 ? `${fresh.length} new messages` : "New message"} from ${last.unverified ? "an unverified member" : last.from || "someone"}`);
+          }
+        }
       } catch (e) {
         if (!dead) setErr(e.message);
       } finally {
@@ -300,7 +327,7 @@ function App() {
           DEADP0ET<span className="text-rose-500">.ARMY</span>
         </span>
         <span className="ml-2 hidden rounded border border-white/10 px-2 py-0.5 font-mono text-[10px] text-slate-500 sm:inline">
-          {SUITE}
+          {mls.current?.SUITE}
         </span>
         <div className="ml-auto flex items-center gap-3">
           <span className="hidden font-mono text-[10px] text-slate-600 sm:inline">build {BUILD}</span>
@@ -355,7 +382,7 @@ function App() {
             </div>
           ) : null}
           {active ? (
-            <Conversation session={active} onError={setErr} onChange={bump} openModal={setModal}
+            <Conversation key={active.channel.id} session={active} onError={setErr} onChange={bump} openModal={setModal}
               onBack={() => setActive(null)} />
           ) : <EmptyState />}
         </main>
@@ -442,6 +469,11 @@ function App() {
           body={'Signing out keeps this device\'s keys either way. "Everywhere" also ends every other session on your account — use it if a device is lost.'}
           choices={[
             { label: "Passkeys…", onPick: () => { setModal({ kind: "passkeys" }); return false; } },
+            { label: "Sessions…", onPick: () => { setModal({ kind: "sessions" }); return false; } },
+            {
+              label: notifyOn ? "Turn off desktop notifications" : "Turn on desktop notifications",
+              onPick: async () => { setNotifyOn(await setNotifications(!notifyOn)); },
+            },
             { label: "Sign out", primary: true, onPick: async () => { await api.logout(); location.reload(); } },
             { label: "Sign out everywhere", onPick: async () => { await api.logoutAll(); location.reload(); } },
             { label: "Delete account…", onPick: () => { setModal({ kind: "delete" }); return false; } },
@@ -451,6 +483,7 @@ function App() {
       ) : null}
 
       {modal?.kind === "passkeys" ? <PasskeysModal onClose={() => setModal(null)} /> : null}
+      {modal?.kind === "sessions" ? <SessionsModal onClose={() => setModal(null)} /> : null}
 
       {modal?.kind === "delete" ? (
         <PromptModal
