@@ -101,6 +101,9 @@ console.log("· uninvited identity sees nothing");
 
 // Invite bob; he should be granted membership by the Welcome.
 await alice.page.getByRole("button", { name: "Invite" }).click();
+// The dialog opens with its text field focused, so it works from the keyboard.
+const focused = await alice.page.evaluate(() => document.activeElement?.getAttribute("placeholder"));
+assert.equal(focused, "ghost_01", "the invite dialog should focus its handle field");
 await alice.page.getByPlaceholder("ghost_01").last().fill(bob.handle);
 await alice.page.getByRole("button", { name: "Invite", exact: true }).last().click();
 await alice.page.waitForTimeout(6000);

@@ -9,11 +9,32 @@ import { AlertTriangle, Loader2, X } from "lucide-react";
 function Shell({ title, children, onClose }) {
   const ref = useRef(null);
 
+  // Mount-only: focus moves in once, and back to where it was on close.
   useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    const before = document.activeElement;
+    // A text field if there is one, else the dialog's primary action. (Not
+    // `querySelector("input, button")`: that returns the first match in
+    // document order, which is the Close button in the header.)
+    const el = ref.current;
+    (el?.querySelector("input, textarea") || el?.querySelector("[data-autofocus]")
+      || el?.querySelector("button"))?.focus();
+    return () => { if (before instanceof HTMLElement && before.isConnected) before.focus(); };
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") { onClose(); return; }
+      // Keep Tab inside the dialog: aria-modal promises the rest is inert.
+      if (e.key !== "Tab" || !ref.current) return;
+      const items = [...ref.current.querySelectorAll("button, input, textarea, [href], [tabindex]:not([tabindex='-1'])")]
+        .filter((n) => !n.disabled);
+      if (!items.length) return;
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    };
     document.addEventListener("keydown", onKey);
-    // Focus the first field so the dialog is usable from the keyboard alone.
-    ref.current?.querySelector("input, button")?.focus();
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
 
@@ -121,6 +142,34 @@ export function ConfirmModal({ title, body, confirmLabel = "Confirm", danger, on
           {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
           {confirmLabel}
         </button>
+      </div>
+    </Shell>
+  );
+}
+
+/**
+ * Several labelled actions. Each onPick may be async; the dialog stays open
+ * and busy until it settles, and closes itself only if the action succeeds.
+ */
+export function ChoiceModal({ title, body, choices, onClose }) {
+  const [busy, setBusy] = useState(null);
+  const pick = async (c) => {
+    setBusy(c.label);
+    try { await c.onPick(); onClose(); } catch { setBusy(null); }
+  };
+  return (
+    <Shell title={title} onClose={busy ? () => {} : onClose}>
+      {body ? <p className="mt-2 text-xs leading-relaxed text-slate-400">{body}</p> : null}
+      <div className="mt-5 flex flex-col gap-2">
+        {choices.map((c, i) => (
+          <button key={c.label} onClick={() => pick(c)} disabled={!!busy} data-autofocus={i === 0 ? "" : undefined}
+            className={`inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold
+              transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 disabled:opacity-40
+              ${c.primary ? "bg-rose-600 text-white hover:bg-rose-500" : "border border-white/15 bg-white/5 text-slate-200 hover:border-rose-500/50"}`}>
+            {busy === c.label ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+            {c.label}
+          </button>
+        ))}
       </div>
     </Shell>
   );

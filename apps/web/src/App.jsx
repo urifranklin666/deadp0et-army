@@ -4,7 +4,7 @@ import {
   MessageSquare, PenLine, RefreshCw, Send, Shield, Skull, UserPlus, Users, X,
 } from "lucide-react";
 import Canvas from "./Canvas.jsx";
-import { ConfirmModal, PromptModal } from "./Modal.jsx";
+import { ChoiceModal, ConfirmModal, PromptModal } from "./Modal.jsx";
 import { api } from "./lib/api.js";
 import { store, K } from "./lib/db.js";
 import { GroupSession, SUITE, ensureDevice, login, register } from "./lib/session.js";
@@ -537,12 +537,16 @@ function App() {
       ) : null}
 
       {modal?.kind === "signout" ? (
-        <SignOutModal
+        // This device keeps its keys either way: signing back in picks up
+        // where it left off.
+        <ChoiceModal
+          title="Sign out"
+          body={'This device keeps its keys either way. "Everywhere" also ends every other session on your account — use it if a device is lost.'}
+          choices={[
+            { label: "Sign out", primary: true, onPick: async () => { await api.logout(); location.reload(); } },
+            { label: "Sign out everywhere", onPick: async () => { await api.logoutAll(); location.reload(); } },
+          ]}
           onClose={() => setModal(null)}
-          onSignOut={async (everywhere) => {
-            await (everywhere ? api.logoutAll() : api.logout());
-            location.reload();
-          }}
         />
       ) : null}
 
@@ -556,37 +560,6 @@ function App() {
           onClose={() => setModal(null)}
         />
       ) : null}
-    </div>
-  );
-}
-
-/**
- * Sign out here, or end every session this account has. Either way this
- * device keeps its keys: signing back in picks up where it left off.
- */
-function SignOutModal({ onClose, onSignOut }) {
-  const [busy, setBusy] = useState(null);
-  const go = async (everywhere) => {
-    setBusy(everywhere ? "all" : "one");
-    try { await onSignOut(everywhere); } catch { setBusy(null); }
-  };
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true"
-      aria-labelledby="signout-title" onClick={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
-      <Glass className="w-full max-w-sm p-5">
-        <h2 id="signout-title" className="text-sm font-bold text-white">Sign out</h2>
-        <p className="mt-2 text-xs leading-relaxed text-slate-400">
-          This device keeps its keys either way. "Everywhere" also ends every other session on
-          your account — use it if a device is lost.
-        </p>
-        <div className="mt-5 flex flex-col gap-2">
-          <Button busy={busy === "one"} disabled={!!busy} onClick={() => go(false)}>Sign out</Button>
-          <Button variant="ghost" busy={busy === "all"} disabled={!!busy} onClick={() => go(true)}>
-            Sign out everywhere
-          </Button>
-          <button onClick={onClose} disabled={!!busy} className="mt-1 text-xs text-slate-500 hover:text-white">Cancel</button>
-        </div>
-      </Glass>
     </div>
   );
 }
