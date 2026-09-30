@@ -63,7 +63,10 @@ cannot both win, or the group forks into histories that can never reconcile.
 a snapshot supersedes, so it prunes strictly below the slowest active device's
 reported cursor. Commits are never pruned. Devices silent past 30 days stop
 pinning the log, and a `compaction_watermark` lets the read path answer
-`gap: true` rather than let a returning device diverge in silence.
+`gap: true` rather than let a returning device diverge in silence. A device
+told it has a gap drops its board and asks the group for a snapshot; the
+client lets MLS ratchet far past the library's default 200-generation limit,
+because a gap can be hundreds of messages from one sender.
 
 **A Welcome is a grant, so it is checked.** Being welcomed materialises
 channel membership, so the server only accepts a Welcome naming a KeyPackage
@@ -192,9 +195,9 @@ it, so passkeys cannot be exercised from `localhost` against a production
 
 Backend suites drive the real HTTP API; browser suites drive a real Chromium
 with a CDP virtual WebAuthn authenticator, against a local stack or the live
-origin. The session
-suite needs no browser: it seeds sessions in Postgres and runs `session.js`
-in Node over an in-memory IndexedDB.
+origin. The session suite needs no browser: it seeds sessions in Postgres and
+runs `session.js` in Node over an in-memory IndexedDB, with crashes and lost
+responses injected where they matter.
 
 ```bash
 pnpm lint                               # undefined/unused identifiers, hook rules
@@ -205,19 +208,20 @@ pnpm test                               # every suite below that runs locally
 backend and session suites against it, and stops it — Postgres with migrations
 applied is all it needs. `pnpm test:browser` does the same for the browser
 suites: the console's production build (`vite preview`, CSP included) on
-`localhost:5174` with WebAuthn pinned to `localhost`, and one for the site on `localhost:5175` that proxies
-`/app` and `/api` the way nginx does (set `CHROMIUM_PATH` to use a Chromium
-other than Playwright's). CI runs both on every pull request. The browser suites also run
-against production with `ORIGIN=https://deadp0et.army`.
+`localhost:5174` with WebAuthn pinned to `localhost`, and the site on
+`localhost:5175` proxying `/app` and `/api` the way nginx does. Set
+`CHROMIUM_PATH` to use a Chromium other than Playwright's. CI runs lint and
+both. The browser suites also run against production with
+`ORIGIN=https://deadp0et.army`.
 
 ```bash
 node apps/api/test/mls.spike.js         # ts-mls itself: PQ group, add, one ciphertext for all
 node apps/api/test/e2ee.test.js         # PQXDH handshake + relay
 node apps/api/test/mls.api.test.js      # delivery service + fork guard
 node apps/api/test/compaction.test.js   # prune safety
-node apps/api/test/housekeeping.test.js # retention sweep, claim throttle, presence revocation
-node apps/web/test/session.test.mjs     # client MLS bookkeeping, against the local api
-node apps/web/test/e2e.mjs              # passkey → channel → message → reload
+node apps/api/test/housekeeping.test.js # retention, rate limits, sockets, roles, passkeys, deletion
+node apps/web/test/session.test.mjs     # client MLS bookkeeping: races, crashes, removal, gaps
+node apps/web/test/e2e.mjs              # passkeys, CSP, chat, members, remove, account
 node apps/web/test/canvas.mjs           # CRDT convergence, late-joiner snapshot
 node apps/web/test/presence.mjs         # live cursors, log stays untouched
 node apps/web/test/mobile.mjs           # console at 390px: one pane at a time, no overflow
@@ -226,6 +230,9 @@ node apps/site/test/funnel.mjs          # marketing → console handoff
 ```
 
 ## Deploy
+
+Run `pnpm migrate` before starting a new api build; until every migration on
+disk is applied, `/api/health` reports `degraded` and names the missing ones.
 
 Each Cloudflare tunnel forwards to nginx, which routes on `Host`, so adding a
 domain never touches a tunnel.
