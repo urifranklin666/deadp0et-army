@@ -39,6 +39,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
+      - run: pnpm audit --audit-level high
       - run: pnpm migrate
       - run: pnpm test
       - run: pnpm --filter web exec playwright install --with-deps chromium
