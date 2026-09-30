@@ -33,7 +33,10 @@ async function withStore(mode, fn) {
     const tx = db.transaction(STORE, mode);
     const store = tx.objectStore(STORE);
     let out;
-    try { out = fn(store); } catch (e) { reject(e); return; }
+    // A synchronous throw (e.g. a value that can't be cloned) must abort the
+    // transaction: otherwise the requests already queued in it still commit,
+    // and a "failed" multi-key write lands half-done.
+    try { out = fn(store); } catch (e) { try { tx.abort(); } catch { /* already done */ } reject(e); return; }
     // Unwrap the IDBRequest. Resolving to the request itself when .result is
     // undefined would hand callers a truthy object for a MISSING key, which
     // reads as "found" and blows up downstream.
@@ -48,6 +51,14 @@ export const store = {
   set: (key, value) => withStore("readwrite", (s) => s.put(value, key)),
   del: (key) => withStore("readwrite", (s) => s.delete(key)),
   clear: () => withStore("readwrite", (s) => s.clear()),
+  /**
+   * Write several keys in ONE transaction: all land or none do. Group state,
+   * cursor and transcript must move together — a ratchet that advanced
+   * without its cursor re-fetches messages it can no longer decrypt, and
+   * their plaintext is gone for good.
+   */
+  setMany: (entries) => withStore("readwrite", (s) => { for (const [k, v] of entries) s.put(v, k); }),
+  delMany: (keys) => withStore("readwrite", (s) => { for (const k of keys) s.delete(k); }),
 };
 
 /* ------------------------------------------------------------------ keys */

@@ -81,6 +81,16 @@ async function room(slug) {
 
 const { A, B } = await room("skip");
 
+// ------------------------------------------- persistence is all-or-nothing
+
+// If any value in the batch can't be stored, none of it is: a cursor must
+// never land without the state and transcript it belongs to.
+await store.set("atomic:a", "old");
+await assert.rejects(store.setMany([["atomic:a", "new"], ["atomic:b", () => "not cloneable"]]));
+assert.equal(await store.get("atomic:a"), "old", "a failed batch must leave earlier keys untouched");
+assert.equal(await store.get("atomic:b"), undefined);
+console.log("· group state, cursor and transcript are persisted atomically");
+
 // ----------------------------------- founding never reuses a published leaf
 
 // Every package this device has published: the primary plus the pool.

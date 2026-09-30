@@ -228,12 +228,15 @@ export class GroupSession {
     await this.#persist();
   }
 
+  /** One atomic write: see store.setMany for why these can't be separate. */
   async #persist() {
     const state = this.client.exportState();
-    if (state) await store.set(K.groupState(this.handle, this.groupId), state);
-    await store.set(K.cursor(this.handle, this.groupId), this.cursor);
-    await store.set(K.history(this.handle, this.groupId), this.history);
-    await store.set(K.ydoc(this.handle, this.groupId), Y.encodeStateAsUpdate(this.doc));
+    await store.setMany([
+      ...(state ? [[K.groupState(this.handle, this.groupId), state]] : []),
+      [K.cursor(this.handle, this.groupId), this.cursor],
+      [K.history(this.handle, this.groupId), this.history],
+      [K.ydoc(this.handle, this.groupId), Y.encodeStateAsUpdate(this.doc)],
+    ]);
   }
 
   async #restoreDoc() {
@@ -557,9 +560,7 @@ export class GroupSession {
     this.removed = true;
     this.client = null;
     this.cursor = 0;
-    for (const key of [K.groupState, K.cursor, K.history, K.ydoc]) {
-      await store.del(key(this.handle, this.groupId));
-    }
+    await store.delMany([K.groupState, K.cursor, K.history, K.ydoc].map((key) => key(this.handle, this.groupId)));
   }
 
   /**
