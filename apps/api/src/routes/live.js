@@ -59,8 +59,7 @@ export async function liveRoutes(app) {
     let windowStart = Date.now();
     let framesThisWindow = 0;
 
-    socket.on("message", (data, isBinary) => {
-      if (!isBinary && data.length > MAX_FRAME) return;
+    socket.on("message", (data) => {
       if (data.length > MAX_FRAME) return;
 
       const now = Date.now();

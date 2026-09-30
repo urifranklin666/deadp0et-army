@@ -56,6 +56,7 @@ export const store = {
 export const K = {
   device: (handle) => `device:${handle}`,
   keyPackage: (handle) => `kp:${handle}`,
+  keyPackagePool: (handle) => `kps:${handle}`,   // ref(b64) -> exported KeyPackage
   groupState: (handle, groupId) => `gs:${handle}:${groupId}`,
   cursor: (handle, groupId) => `cur:${handle}:${groupId}`,
   history: (handle, groupId) => `hist:${handle}:${groupId}`,
