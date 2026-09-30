@@ -171,6 +171,9 @@ function App() {
   const sessions = useRef(new Map());
   const notifiedWelcomes = useRef(new Set());
   const hints = useRef(null);
+  const [unread, setUnread] = useState(() => new Set());   // groupIds with news we haven't opened
+  const activeRef = useRef(null);
+  activeRef.current = active;
   const [modal, setModal] = useState(null);
 
   const bump = useCallback(() => setTick((t) => t + 1), []);
@@ -216,6 +219,9 @@ function App() {
 
   async function openChannel(ch) {
     setErr(null);
+    if (ch.groupId) {
+      setUnread((u) => { if (!u.has(ch.groupId)) return u; const n = new Set(u); n.delete(ch.groupId); return n; });
+    }
     let s = sessions.current.get(ch.id);
     // A cached session without MLS state is one whose join (or founding)
     // didn't happen yet — typically opened before the Welcome arrived. Retry
@@ -277,6 +283,11 @@ function App() {
     const h = new Hints();
     h.connect();
     hints.current = h;
+    // News for a channel that isn't on screen marks it unread.
+    h.on((hint) => {
+      if (hint.t !== "log" || hint.g === activeRef.current?.groupId) return;
+      setUnread((u) => (u.has(hint.g) ? u : new Set(u).add(hint.g)));
+    });
     return () => { h.close(); if (hints.current === h) hints.current = null; };
   }, [phase]);
 
@@ -419,7 +430,10 @@ function App() {
                 className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition-colors
                   ${active?.channel?.id === ch.id ? "bg-rose-600/15 text-white" : "text-slate-400 hover:bg-white/5"}`}>
                 <Hash className="h-3.5 w-3.5 shrink-0 opacity-60" />
-                <span className="truncate">{ch.slug}</span>
+                <span className={`truncate ${unread.has(ch.groupId) ? "font-semibold text-white" : ""}`}>{ch.slug}</span>
+                {unread.has(ch.groupId) ? (
+                  <span className="ml-auto h-2 w-2 shrink-0 rounded-full bg-rose-500" aria-label="unread" />
+                ) : null}
               </button>
             ))}
           </div>

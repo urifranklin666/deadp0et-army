@@ -139,7 +139,24 @@ for (const h of [alice.handle, bob.handle]) {
 console.log("· member list shows both handles");
 if (process.env.SHOT) await alice.page.screenshot({ path: process.env.SHOT });
 
+// Unread: alice moves to another channel; bob posts in the first; alice's
+// sidebar marks it, and opening it clears the mark.
+await alice.page.keyboard.press("Escape");                   // close the member list
+const slug2 = "room-" + rnd();
+await alice.page.getByRole("button", { name: "New channel" }).click();
+await alice.page.getByPlaceholder("war-room").fill(slug2);
+await alice.page.getByRole("button", { name: "Create", exact: true }).click();
+await alice.page.getByText(slug2, { exact: true }).first().waitFor({ timeout: 60000 });
+await bob.page.getByPlaceholder(/Encrypted before it leaves/).fill("ping " + rnd());
+await bob.page.getByRole("button", { name: "Send" }).click();
+const room1 = alice.page.getByRole("button", { name: new RegExp(`^${slug}`) });
+await room1.getByLabel("unread").waitFor({ timeout: 15000 });
+await room1.click();
+await room1.getByLabel("unread").waitFor({ state: "detached", timeout: 15000 });
+console.log("· a hint marks a background channel unread; opening it clears the mark");
+
 // Alice (owner) removes bob from the member list; bob's console notices.
+await alice.page.getByRole("button", { name: "Members" }).click();
 bob.removed = true;
 await alice.page.getByRole("listitem").filter({ hasText: bob.handle })
   .getByRole("button", { name: "Remove" }).click();
