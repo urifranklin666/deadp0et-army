@@ -168,10 +168,11 @@ pnpm test                               # every suite below that runs locally
 
 `pnpm test` starts its own api on port 8791 with test-friendly limits, runs the
 backend and session suites against it, and stops it — Postgres with migrations
-applied is all it needs. `pnpm test:browser` does the same for the console's
-browser suites, adding a Vite dev server on `localhost:5174` with WebAuthn
-pinned to `localhost` (set `CHROMIUM_PATH` to use a Chromium other than
-Playwright's). CI runs both on every pull request. The browser suites also run
+applied is all it needs. `pnpm test:browser` does the same for the browser
+suites: a Vite dev server for the console on `localhost:5174` with WebAuthn
+pinned to `localhost`, and one for the site on `localhost:5175` that proxies
+`/app` and `/api` the way nginx does (set `CHROMIUM_PATH` to use a Chromium
+other than Playwright's). CI runs both on every pull request. The browser suites also run
 against production with `ORIGIN=https://deadp0et.army`.
 
 ```bash

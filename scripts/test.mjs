@@ -10,8 +10,9 @@
  * localhost), runs each suite in turn, and always stops what it started.
  * Set CHROMIUM_PATH to use a Chromium other than Playwright's own.
  *
- * Not covered here: apps/site/test/funnel.mjs, which needs the site and the
- * console behind one origin the way nginx serves them.
+ * The marketing funnel needs the site and the console on one origin, as
+ * nginx serves them; browser mode recreates that with a second Vite server
+ * for the site that proxies /app to the console's.
  */
 import { spawn } from "node:child_process";
 import path from "node:path";
@@ -22,11 +23,13 @@ const browser = process.argv.includes("--browser");
 
 const API_PORT = process.env.TEST_PORT || "8791";
 const WEB_PORT = process.env.TEST_WEB_PORT || "5174";
+const SITE_PORT = process.env.TEST_SITE_PORT || "5175";
 const API = `http://127.0.0.1:${API_PORT}`;
 const WEB = `http://localhost:${WEB_PORT}`;
+const SITE = `http://localhost:${SITE_PORT}`;
 
 const SUITES = browser
-  ? ["apps/web/test/e2e.mjs", "apps/web/test/canvas.mjs", "apps/web/test/presence.mjs"]
+  ? ["apps/web/test/e2e.mjs", "apps/web/test/canvas.mjs", "apps/web/test/presence.mjs", "apps/site/test/funnel.mjs"]
   : [
       "apps/api/test/e2ee.test.js",
       "apps/api/test/mls.api.test.js",
@@ -41,6 +44,7 @@ const env = {
   BASE: API,
   ORIGIN: WEB,
   API_TARGET: API,
+  CONSOLE_TARGET: WEB,
   // WebAuthn validates both; they must name the origin the browser is on.
   RP_ID: "localhost",
   RP_ORIGIN: WEB,
@@ -78,11 +82,16 @@ if (browser) {
   start([process.execPath, "node_modules/vite/bin/vite.js", "--port", WEB_PORT, "--strictPort"],
     { cwd: path.join(root, "apps/web"), stdio: "ignore" });
   await waitFor(`${WEB}/app/`, (r) => r.ok, "vite");
+  start([process.execPath, "node_modules/vite/bin/vite.js", "--port", SITE_PORT, "--strictPort"],
+    { cwd: path.join(root, "apps/site"), stdio: "ignore" });
+  await waitFor(`${SITE}/`, (r) => r.ok, "site vite");
 }
 
 function run(file) {
+  // The funnel starts at the marketing site; everything else at the console.
+  const origin = file.startsWith("apps/site/") ? SITE : WEB;
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [file], { cwd: root, env, stdio: "inherit" });
+    const child = spawn(process.execPath, [file], { cwd: root, env: { ...env, ORIGIN: origin }, stdio: "inherit" });
     child.on("exit", (code) => resolve(code ?? 1));
   });
 }
