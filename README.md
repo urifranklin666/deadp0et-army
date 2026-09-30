@@ -261,6 +261,8 @@ node apps/site/test/funnel.mjs          # marketing → console handoff
 
 Run `pnpm migrate` before starting a new api build; until every migration on
 disk is applied, `/api/health` reports `degraded` and names the missing ones.
+It is also `degraded` when `REDIS_URL` is set but Redis can't be reached
+(`"redis": "down"`): sign-in challenges live there.
 
 Each Cloudflare tunnel forwards to nginx, which routes on `Host`, so adding a
 domain never touches a tunnel.

@@ -14,7 +14,7 @@ import { notifyRoutes } from "./routes/notify.js";
 import { compactAll } from "./compaction.js";
 import { sweepExpired } from "./retention.js";
 import { challengeBackend, closeChallenges } from "./challenges.js";
-import { busBackend, closeBus } from "./bus.js";
+import { busBackend, closeBus, redisHealth } from "./bus.js";
 
 const app = Fastify({
   logger: { level: process.env.LOG_LEVEL || "info" },
@@ -53,10 +53,14 @@ async function pendingMigrations() {
 app.get("/api/health", async () => {
   const started = Date.now();
   const db = await q("SELECT 1 AS ok").then(() => "up").catch(() => "down");
-  const pending = db === "up" ? await pendingMigrations().catch(() => null) : null;
+  const [pending, redis] = await Promise.all([
+    db === "up" ? pendingMigrations().catch(() => null) : null,
+    redisHealth(),
+  ]);
   return {
-    status: db === "up" && pending?.length === 0 ? "ok" : "degraded",
+    status: db === "up" && pending?.length === 0 && redis !== "down" ? "ok" : "degraded",
     db,
+    ...(redis ? { redis } : {}),
     ...(pending?.length ? { pending_migrations: pending } : {}),
     uptime_s: Math.round(process.uptime()),
     latency_ms: Date.now() - started,
