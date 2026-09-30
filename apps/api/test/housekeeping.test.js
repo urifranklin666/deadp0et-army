@@ -14,6 +14,7 @@ import crypto from "node:crypto";
 import assert from "node:assert/strict";
 import WebSocket from "ws";
 import { sweepExpired } from "../src/retention.js";
+import { MlsClient, b64 } from "../../../packages/crypto/src/mls.js";
 import { putChallenge, takeChallenge, challengeBackend, closeChallenges } from "../src/challenges.js";
 import { q, pool } from "../src/db.js";
 
@@ -146,10 +147,11 @@ console.log("· key-package claims rate-limited per address (", limited, "refuse
 
 // Unused-claim cap: however many sessions or addresses, one user may hold
 // only a few never-welcomed claims against another user's device.
-const kps = Array.from({ length: 6 }, () => ({
-  ref: crypto.randomBytes(32).toString("base64"),
-  keyPackage: crypto.randomBytes(64).toString("base64"),
-}));
+const kps = [];
+for (let i = 0; i < 6; i++) {
+  const kp = await (await MlsClient.create("hk_bob")).newKeyPackage();
+  kps.push({ ref: b64(kp.ref), keyPackage: b64(kp.encoded) });
+}
 const pub = await api(bob, "POST", "/api/mls/key-packages", { deviceId: bDev, ciphersuite: "hk", keyPackages: kps });
 assert.equal(pub.json.available, 6);
 const drainer = await seedUser("hk_drainer");
@@ -178,6 +180,16 @@ const status = (await api(bob, "GET", `/api/mls/devices/${bDev}/key-packages`)).
 assert.equal(status.stale.length, 3, "day-old unwelcomed claims should be reported stale");
 assert.ok(status.stale.every((r) => kps.some((k) => k.ref === r)));
 console.log("· stale claims reported to the owning device");
+
+// A KeyPackage must name its uploader: nobody publishes themselves as bob.
+const posing = await (await MlsClient.create("hk_bob")).newKeyPackage();
+const aliceKp = await api(alice, "POST", "/api/mls/key-packages", {
+  deviceId: aDev, ciphersuite: "hk", keyPackages: [{ ref: b64(posing.ref), keyPackage: b64(posing.encoded) }] });
+assert.equal(aliceKp.status, 400, "a key package naming someone else must be refused");
+const junkKp = await api(alice, "POST", "/api/mls/key-packages", {
+  deviceId: aDev, ciphersuite: "hk", keyPackages: [{ ref: "AAAA", keyPackage: "bm90IGEga2V5IHBhY2thZ2U=" }] });
+assert.equal(junkKp.status, 400, "bytes that aren't a key package must be refused");
+console.log("· key packages must carry their uploader's handle");
 
 // ------------------------------------------------ presence revocation
 

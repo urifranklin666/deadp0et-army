@@ -1,5 +1,6 @@
 import { q, tx } from "../db.js";
 import { requireSession } from "./auth.js";
+import { revokeAccess } from "../membership.js";
 
 const b64 = (buf) => Buffer.from(buf).toString("base64");
 const unb64 = (s) => Buffer.from(String(s), "base64");
@@ -57,12 +58,7 @@ export async function messageRoutes(app) {
         [req.params.id, req.user.id]);
       if (!rows.length) return 404;
       if (rows[0].role === "owner") return 409;
-      await c.query("DELETE FROM channel_members WHERE channel_id=$1 AND user_id=$2",
-        [req.params.id, req.user.id]);
-      await c.query(
-        `DELETE FROM mls_device_cursors WHERE device_id IN (SELECT id FROM devices WHERE user_id=$2)
-            AND group_id IN (SELECT group_id FROM mls_groups WHERE channel_id=$1)`,
-        [req.params.id, req.user.id]);
+      await revokeAccess(c, req.params.id, req.user.id);
       return 200;
     });
     if (out === 404) return reply.code(404).send({ error: "not a member" });

@@ -18,7 +18,8 @@ const rooms = new Map();          // groupId(b64) -> Set<socket>
 const MAX_FRAME = 4096;           // a cursor packet is ~60 bytes
 const MAX_PER_SEC = 40;           // generous for 20Hz, cheap to enforce
 const MAX_SOCKETS_PER_USER = 4;   // per group: a few tabs, not a fan-out amplifier
-const RP_ORIGIN = process.env.RP_ORIGIN;
+// Same default as WebAuthn's in auth.js: never "unset means anything goes".
+const RP_ORIGIN = process.env.RP_ORIGIN || "http://localhost";
 const RECHECK_MS = Number(process.env.PRESENCE_RECHECK_MS) || 60_000;  // max time a revoked session keeps listening
 
 const sha256 = (s) => crypto.createHash("sha256").update(s).digest();
@@ -69,7 +70,7 @@ export async function liveRoutes(app) {
     // and CORS does not apply to WebSockets. Without this check a page on
     // another origin of the same site could listen in as the user (seeing
     // only ciphertext, but still traffic timing and sizes) and inject frames.
-    if (RP_ORIGIN && req.headers.origin !== RP_ORIGIN) {
+    if (req.headers.origin !== RP_ORIGIN) {
       socket.close(4403, "forbidden");
       return;
     }

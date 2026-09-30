@@ -115,6 +115,22 @@ epoch, new key on epoch change — and relayed over a WebSocket that persists
 nothing. Each socket re-checks its session and membership every minute, so
 logging out or leaving a channel also stops the frames.
 
+## Known limits
+
+Both follow from commits being MLS *private* messages (opaque to the server)
+and from members using unsigned "basic" credentials:
+
+- **Removal authorization binds honest clients only.** The server checks the
+  `removes` a commit declares, but cannot see the proposals inside it, so a
+  modified client could commit a removal without declaring it. Closing this
+  means sending handshake messages as MLS public messages (revealing
+  membership changes to the server, which largely knows them already) so the
+  server can validate proposals against roles.
+- **Attribution trusts credentials after the add.** The server only accepts
+  KeyPackages naming their uploader, and inviters re-check that, but a member
+  running a modified client could later commit a leaf update carrying a
+  different name. Closing this needs credentials the server (or users) sign.
+
 ## Development
 
 ```bash

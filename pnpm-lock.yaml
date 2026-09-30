@@ -34,6 +34,9 @@ importers:
       pg:
         specifier: ^8.13.1
         version: 8.22.0
+      ts-mls:
+        specifier: ^1.6.2
+        version: 1.6.2(@hpke/chacha20poly1305@1.8.0)(@hpke/ml-kem@0.3.0)(@noble/ciphers@2.2.0)(@noble/curves@2.2.0)(@noble/post-quantum@0.6.1)
     devDependencies:
       '@hpke/chacha20poly1305':
         specifier: ^1.8.0
@@ -62,9 +65,6 @@ importers:
       '@signalapp/libsignal-client':
         specifier: ^0.99.1
         version: 0.99.1
-      ts-mls:
-        specifier: ^1.6.2
-        version: 1.6.2(@hpke/chacha20poly1305@1.8.0)(@hpke/ml-kem@0.3.0)(@noble/ciphers@2.2.0)(@noble/curves@2.2.0)(@noble/post-quantum@0.6.1)
       ws:
         specifier: ^8.21.1
         version: 8.21.1

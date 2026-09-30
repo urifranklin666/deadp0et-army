@@ -640,7 +640,7 @@ function Conversation({ session, onError, onChange, openModal }) {
       {mode === "canvas" ? <Canvas session={session} onError={onError} openModal={openModal} /> : (
       <>
       <div className="dp-scroll min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        {!session.client ? (
+        {!session.client && !session.removed ? (
           <p className="mx-auto max-w-sm text-center text-[11px] leading-relaxed text-slate-600">
             This device isn't a member yet. Once someone invites you, the Welcome arrives on the
             next poll and history starts from that point — earlier traffic stays unreadable, by design.

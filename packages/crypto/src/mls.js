@@ -146,12 +146,22 @@ export class MlsClient {
    * The caller is responsible for submitting these AT the epoch they were
    * built against — the server rejects a commit for a superseded epoch.
    */
-  async addMembers(encodedKeyPackages) {
+  async addMembers(encodedKeyPackages, { replacing = [] } = {}) {
     const proposals = encodedKeyPackages.map((bytes) => {
       const msg = decode(bytes);
       if (msg.wireformat !== "mls_key_package") throw new Error("not a key package");
       return { proposalType: "add", add: { keyPackage: msg.keyPackage } };
     });
+    // Old leaves of the people being (re-)added — e.g. someone who left and
+    // whose leaf was never pruned — go in the same commit, so they don't keep
+    // receiving epoch secrets alongside the new ones.
+    const wanted = new Set(replacing);
+    const own = this.#state.privatePath?.leafIndex;
+    for (const m of this.members()) {
+      if (wanted.has(m.identity) && m.leafIndex !== own) {
+        proposals.push({ proposalType: "remove", remove: { removed: m.leafIndex } });
+      }
+    }
     const builtAtEpoch = this.epoch;
     const res = await createCommit(
       { state: this.#state, cipherSuite: this.#cs },
@@ -233,7 +243,11 @@ export class MlsClient {
   async applyWithSender(encoded) {
     const msg = decode(encoded);
     if (msg.wireformat !== "mls_private_message") return { text: null, sender: null };
-    const sender = await this.#senderOf(msg.privateMessage).catch(() => null);
+    // Only application messages are attributed; don't pay for the extra
+    // sender-data decryption on commits and proposals.
+    const sender = msg.privateMessage.contentType === "application"
+      ? await this.#senderOf(msg.privateMessage).catch(() => null)
+      : null;
     const res = await processPrivateMessage(this.#state, msg.privateMessage, emptyPskIndex, this.#cs);
     this.#state = res.newState;
     return res.kind === "applicationMessage"

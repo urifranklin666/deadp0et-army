@@ -1,5 +1,7 @@
 import { q, tx } from "../db.js";
 import { requireSession } from "./auth.js";
+import { revokeAccess } from "../membership.js";
+import { decodeMlsMessage } from "ts-mls";
 
 const b64 = (buf) => Buffer.from(buf).toString("base64");
 const unb64 = (s) => Buffer.from(String(s), "base64");
@@ -27,6 +29,19 @@ async function groupMembership(userId, groupIdB64) {
     [unb64(groupIdB64), userId]
   );
   return rows[0] ?? null;
+}
+
+/** The basic-credential identity a serialized KeyPackage claims, or null. */
+function keyPackageIdentity(bytes) {
+  try {
+    const dec = decodeMlsMessage(new Uint8Array(bytes), 0);
+    const msg = Array.isArray(dec) ? dec[0] : dec;
+    if (msg?.wireformat !== "mls_key_package") return null;
+    const cred = msg.keyPackage.leafNode.credential;
+    return cred.credentialType === "basic" ? Buffer.from(cred.identity).toString("utf8") : null;
+  } catch {
+    return null;
+  }
 }
 
 async function keyPackageStatus(deviceId) {
@@ -86,6 +101,17 @@ export async function mlsRoutes(app) {
     }
     const dev = await ownedDevice(req.user.id, deviceId);
     if (!dev) return reply.code(404).send({ error: "no such device" });
+
+    // The credential inside a KeyPackage is what every group member will see
+    // as this device's name, and its owner wrote it. Only accept packages
+    // that name their uploader, so nobody can publish themselves as someone
+    // else. (KeyPackages are public material; reading one costs no privacy.)
+    for (const kp of items) {
+      const who = keyPackageIdentity(unb64(kp.keyPackage));
+      if (who !== req.user.handle) {
+        return reply.code(400).send({ error: "key package credential must name the uploading user" });
+      }
+    }
 
     await tx(async (c) => {
       for (const kp of items) {
@@ -226,14 +252,15 @@ export async function mlsRoutes(app) {
     // Removal. The commit itself is opaque, so the server cannot see who it
     // removes from the MLS group; `removes` names them so their access to the
     // channel's ciphertext ends with the same transaction. Cryptographically
-    // they are already out — the next epoch's keys never reach them. Only a
-    // channel owner or admin may do this, and never to an owner or themself.
+    // they are already out — the next epoch's keys never reach them.
+    //
+    // Removing a current member takes an owner or admin (checked per target
+    // below), and never an owner or oneself. Pruning the leftover leaf of
+    // someone who is no longer a member is hygiene any member may do: it
+    // revokes nothing, and a re-invite needs it.
     const drops = Array.isArray(removes) ? [...new Set(removes.map(String))] : [];
     if (drops.length) {
       if (kind !== "commit") return reply.code(400).send({ error: "removes only ride along with a commit" });
-      if (!["owner", "admin"].includes(g.role)) {
-        return reply.code(403).send({ error: "only a channel owner or admin can remove members" });
-      }
       if (drops.includes(req.user.handle)) return reply.code(400).send({ error: "cannot remove yourself" });
     }
 
@@ -290,6 +317,26 @@ export async function mlsRoutes(app) {
           [g.group_id, writeEpoch, kind, dev, body, expires]);
         const seq = Number(rows[0].seq);
 
+        // Revocations first: a re-invite commit both prunes someone's old
+        // leaf and welcomes them back, and the grant below must be the last
+        // word on their membership.
+        for (const handle of drops) {
+          const { rows: [target] } = await c.query(
+            `SELECT u.id, m.role FROM users u
+               LEFT JOIN channel_members m ON m.user_id = u.id AND m.channel_id = $1
+              WHERE u.handle = $2`, [g.channel_id, handle]);
+          // No such user, or not a member any more: a leaf with nothing to
+          // revoke. Refusing would block every other removal in the batch.
+          if (!target?.role) continue;
+          if (target.role === "owner") {
+            throw Object.assign(new Error("an owner cannot be removed"), { statusCode: 400 });
+          }
+          if (!["owner", "admin"].includes(g.role)) {
+            throw Object.assign(new Error("only a channel owner or admin can remove members"), { statusCode: 403 });
+          }
+          await revokeAccess(c, g.channel_id, target.id);
+        }
+
         // Welcomes ride along with the commit that added the members.
         //
         // Being welcomed into the group IS the grant of log access — otherwise
@@ -315,33 +362,6 @@ export async function mlsRoutes(app) {
             `INSERT INTO mls_device_cursors(group_id, device_id, last_seq)
              VALUES ($1,$2,$3) ON CONFLICT (group_id, device_id) DO NOTHING`,
             [g.group_id, w.deviceId, seq]);
-        }
-        for (const handle of drops) {
-          const { rows: [target] } = await c.query(
-            `SELECT u.id, m.role FROM users u
-               LEFT JOIN channel_members m ON m.user_id = u.id AND m.channel_id = $1
-              WHERE u.handle = $2`, [g.channel_id, handle]);
-          if (!target) throw Object.assign(new Error(`no such user ${handle}`), { statusCode: 400 });
-          if (target.role === "owner") {
-            throw Object.assign(new Error("an owner cannot be removed"), { statusCode: 400 });
-          }
-          // Someone who already left is still in the MLS tree until a commit
-          // removes their leaf; that commit is legitimate and revokes nothing.
-          if (target.role) {
-            await c.query("DELETE FROM channel_members WHERE channel_id=$1 AND user_id=$2",
-              [g.channel_id, target.id]);
-          }
-          const gone = [{ user_id: target.id }];
-          // Their devices stop pinning compaction and lose any pending join.
-          await c.query(
-            `DELETE FROM mls_device_cursors
-              WHERE group_id = $1 AND device_id IN (SELECT id FROM devices WHERE user_id = $2)`,
-            [g.group_id, gone[0].user_id]);
-          await c.query(
-            `DELETE FROM mls_welcomes
-              WHERE group_id = $1 AND delivered_at IS NULL
-                AND target_device_id IN (SELECT id FROM devices WHERE user_id = $2)`,
-            [g.group_id, gone[0].user_id]);
         }
         return { seq, epoch: writeEpoch };
       });

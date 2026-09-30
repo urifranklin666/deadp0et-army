@@ -156,15 +156,20 @@ console.log("· concurrent refills keep every published package openable");
 
 // ------------------------------------ an invitee can't pose as someone else
 
-// Mallory publishes a KeyPackage whose credential says "sess_alice". Anyone
-// inviting mallory must refuse it, or mallory's messages would read as alice's.
+// A KeyPackage whose credential says "sess_alice" sits in mallory's slot.
+// The server refuses such uploads, so plant it directly — this is what a
+// compromised server could hand out. The inviter must still refuse it, or
+// mallory's messages would read as alice's.
 const mallory = await seedUser("sess_mallory");
 as(mallory);
 const mDev = (await ensureDevice(mallory.handle)).deviceId;
 await q("UPDATE mls_key_packages SET claimed_at = now() WHERE device_id=$1", [mDev]);  // only the forgery left
 const forger = await MlsClient.create(alice.handle);
 const forged = await forger.newKeyPackage();
-await api.publishKeyPackages(mDev, SUITE, [{ ref: b64(forged.ref), keyPackage: b64(forged.encoded) }]);
+await assert.rejects(api.publishKeyPackages(mDev, SUITE, [{ ref: b64(forged.ref), keyPackage: b64(forged.encoded) }]),
+  /must name the uploading user/, "the server refuses an impostor upload");
+await q("INSERT INTO mls_key_packages(device_id, ciphersuite, ref, key_package) VALUES ($1,$2,$3,$4)",
+  [mDev, SUITE, Buffer.from(forged.ref), Buffer.from(forged.encoded)]);
 as(bob);
 const epochBeforeForgery = B.epoch;
 await assert.rejects(B.invite(mallory.handle), /claims to be "sess_alice"/);
@@ -247,15 +252,28 @@ assert.equal(B.epoch, A.epoch);
 
 // Carol notices, and even handed the ciphertext directly cannot read it.
 as(carol);
+const carolKeys = Cs.client;                  // her last state, before she learns of it
 const r = await Cs.sync();
 assert.equal(r.removed, true, "the removed device should learn it was removed");
 assert.ok(Cs.history.some((h) => h.notice?.includes("removed")));
 const { rows: [after] } = await q(
   `SELECT payload FROM mls_messages WHERE group_id=$1 AND kind='application' ORDER BY seq DESC LIMIT 1`,
   [Buffer.from(A.groupId, "base64")]);
-await assert.rejects(Cs.client.apply(new Uint8Array(after.payload)),
+await assert.rejects(carolKeys.apply(new Uint8Array(after.payload)),
   "a removed member must not decrypt anything sent after the removal");
 console.log("· owner removed carol: access revoked, and later messages are unreadable to her");
+
+// Her device forgot the group, so a later re-invite joins afresh.
+assert.equal(Cs.client, null);
+assert.equal(await store.get(K.groupState(carol.handle, A.groupId)), undefined,
+  "a removed device should wipe the group's keys");
+as(alice); await A.invite(carol.handle);
+as(carol);
+assert.equal(await Cs.tryJoin(), true, "a removed member can be invited back");
+as(alice); await A.send("welcome back");
+as(carol); await Cs.sync();
+assert.ok(texts(Cs).includes("welcome back"));
+console.log("· a removed member forgets the group and can be re-invited");
 
 // ----------------------------------------------------- leaving + reconcile
 
@@ -280,6 +298,22 @@ assert.equal(await A2.reconcile(), 0, "nothing left to reconcile");
 // The owner cannot leave their own channel.
 await assert.rejects(A2.leave(), /owner cannot leave/);
 console.log("· leaving ends access and wipes local keys; the owner's client prunes the leaf");
+
+// Re-invited before anyone reconciled: the old leaf goes in the same commit.
+const third = await room("third");
+as(bob); await third.B.leave();
+as(alice);
+assert.ok(third.A.members().includes(bob.handle), "bob's old leaf is still there");
+await third.A.invite(bob.handle);
+const bobLeaves = third.A.client.members().filter((m) => m.identity === bob.handle).length;
+assert.equal(bobLeaves, 1, "the re-invite should replace bob's old leaf, not sit beside it");
+const B3 = new GroupSession(bob.handle, bDev, third.A.channel);
+B3.groupId = third.A.groupId;
+as(bob); assert.equal(await B3.tryJoin(), true);
+as(alice); await third.A.send("third time");
+as(bob); await B3.sync();
+assert.ok(texts(B3).includes("third time"));
+console.log("· re-inviting a leaver replaces their stale leaf in the same commit");
 
 await settle();                                     // let fire-and-forget cursor reports land
 await q("DELETE FROM users WHERE handle = ANY($1)", [["sess_alice", "sess_bob", "sess_carol", "sess_dave", "sess_mallory"]]);

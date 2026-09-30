@@ -299,6 +299,7 @@ export class GroupSession {
     const kp = pool[mine.ref] || (await store.get(K.keyPackage(this.handle)));
     this.client = await MlsClient.restore(this.handle, { keyPackage: kp });
     await this.client.joinFromWelcome(unb64(mine.welcome));
+    this.removed = false;                     // a re-invite after removal or leaving
     // Start reading after the commit that added us; earlier traffic is not
     // decryptable with the keys we were given, by design.
     this.cursor = mine.joinedAtSeq || 0;
@@ -342,7 +343,7 @@ export class GroupSession {
   sync() { return this.#exclusive(() => this.#sync()); }
 
   async #sync() {
-    if (!this.client || this.removed) return { applied: 0, removed: !!this.removed };
+    if (!this.client) return { applied: 0, removed: !!this.removed };
     let res;
     try {
       res = await api.messages(this.groupId, this.cursor);
@@ -351,12 +352,14 @@ export class GroupSession {
       // cut our access, and the group has (or will have) moved to an epoch
       // whose keys we never get. Stop asking.
       if (e.status !== 404) throw e;
-      this.removed = true;
+      // Forget the group's keys: they can't open anything new, and keeping
+      // them would make a later re-invite restore this dead state instead of
+      // joining afresh. The transcript stays on screen until navigation.
+      await this.#forget();
       this.history.push({
         seq: this.cursor, at: new Date().toISOString(),
         notice: "You were removed from this channel. Nothing sent after that is readable to this device.",
       });
-      await this.#persist();
       return { applied: 0, removed: true };
     }
     const { messages } = res;
@@ -543,11 +546,17 @@ export class GroupSession {
   async #leave() {
     await api.leave(this.channel.id);
     // Only once the server agreed: a refused leave must not drop unsent edits.
+    await this.#forget();
+    this.history = [];
+  }
+
+  /** Drop this device's copy of the group: keys, cursor, transcript, board. */
+  async #forget() {
     clearTimeout(this.flushTimer);
     this.pendingUpdates = [];
     this.removed = true;
     this.client = null;
-    this.history = [];
+    this.cursor = 0;
     for (const key of [K.groupState, K.cursor, K.history, K.ydoc]) {
       await store.del(key(this.handle, this.groupId));
     }
@@ -596,10 +605,17 @@ export class GroupSession {
         throw new Error(`a key package for ${handle} claims to be ${JSON.stringify(who)}; refusing to add it`);
       }
     }
+    // Someone re-invited before their old leaf was pruned (they left, or
+    // were removed from the roster only): replace it in the same commit, and
+    // say so, so the server can check it's a non-member's. A current member
+    // being given another device keeps their existing leaves.
+    const stale = this.members().includes(handle)
+      && !(await api.members(this.channel.id)).members.some((m) => m.handle === handle);
     await this.#commit(
-      (client) => client.addMembers(keyPackages.map((k) => unb64(k.keyPackage))),
+      (client) => client.addMembers(keyPackages.map((k) => unb64(k.keyPackage)), { replacing: stale ? [handle] : [] }),
       (add) => ({
         welcomes: keyPackages.map((k) => ({ ref: k.ref, deviceId: k.deviceId, welcome: b64(add.welcome) })),
+        ...(stale ? { removes: [handle] } : {}),
       }));
     // Everything before the commit is undecryptable to the new member, so the
     // canvas would be blank for them. Re-publish the board at the new epoch.
