@@ -36,6 +36,13 @@ export async function login(handle) {
   return api.post("/api/auth/login/finish", { response: assertion, challenge: options.challenge });
 }
 
+/** Register another passkey for the signed-in account (a backup). */
+export async function addPasskey() {
+  const { options } = await api.post("/api/auth/passkeys/start", {});
+  const attResp = await startRegistration({ optionsJSON: options });
+  return api.post("/api/auth/passkeys/finish", { response: attResp });
+}
+
 /**
  * Ensure this browser has a registered device and published KeyPackages.
  *

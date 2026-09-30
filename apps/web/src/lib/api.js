@@ -29,6 +29,8 @@ export const api = {
   logout: () => call("POST", "/api/auth/logout"),
   logoutAll: () => call("POST", "/api/auth/logout-all"),
   deleteAccount: () => call("POST", "/api/auth/delete"),
+  passkeys: () => call("GET", "/api/auth/passkeys"),
+  removePasskey: (id) => call("POST", `/api/auth/passkeys/${encodeURIComponent(id)}/remove`),
 
   channels: () => call("GET", "/api/channels"),
   createChannel: (slug, kind) => call("POST", "/api/channels", { slug, kind }),

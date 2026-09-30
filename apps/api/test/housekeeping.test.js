@@ -97,6 +97,22 @@ assert.equal((await api({ cookie: `dp_session=${other}` }, "GET", "/api/auth/me"
   "the other device's session must be dead too");
 console.log("· sign-out-everywhere ends every session of the account");
 
+// ---------------------------------------------------------------- passkeys
+
+const keyed = await seedUser("hk_keyed");
+const cred = async () => (await q(
+  `INSERT INTO webauthn_credentials(user_id, credential_id, public_key) VALUES ($1,$2,$3) RETURNING id`,
+  [keyed.id, crypto.randomBytes(16), crypto.randomBytes(32)])).rows[0].id;
+const k1 = await cred();
+const k2 = await cred();
+assert.equal((await api(keyed, "GET", "/api/auth/passkeys")).json.passkeys.length, 2);
+assert.equal((await api(alice, "POST", `/api/auth/passkeys/${k1}/remove`, {})).status, 404,
+  "nobody removes someone else's passkey");
+assert.equal((await api(keyed, "POST", `/api/auth/passkeys/${k1}/remove`, {})).status, 200);
+assert.equal((await api(keyed, "POST", `/api/auth/passkeys/${k2}/remove`, {})).status, 409,
+  "the last passkey can't be removed");
+console.log("· passkeys: list, remove others' refused, last one kept");
+
 // --------------------------------------------------------- delete account
 
 const quitter = await seedUser("hk_quitter");
@@ -358,7 +374,7 @@ hb.close(); ho.close();
 console.log("· delivery hints reach members only, and need a session and our origin");
 
 await q("DELETE FROM users WHERE handle = ANY($1)",
-  [["hk_alice", "hk_bob", "hk_expired", "hk_claimant", "hk_outsider", "hk_drainer", "hk_nosy", "hk_multi", "hk_heir"]]);
+  [["hk_alice", "hk_bob", "hk_expired", "hk_claimant", "hk_outsider", "hk_drainer", "hk_nosy", "hk_multi", "hk_heir", "hk_keyed"]]);
 await pool.end();
 await closeChallenges();
 console.log("\nALL HOUSEKEEPING ASSERTIONS PASSED");

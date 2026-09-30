@@ -176,6 +176,74 @@ export async function authRoutes(app) {
     return { ok: true, ended: rowCount };
   });
 
+  // --- more passkeys for this account ---
+  //
+  // Sign-in is passkey-only, so a single passkey is a single point of loss:
+  // lose that authenticator and the account is gone. These let a signed-in
+  // user add backups (another device, a security key) and prune old ones.
+
+  app.get("/api/auth/passkeys", { preHandler: requireSession }, async (req) => {
+    const { rows } = await q(
+      `SELECT id, created_at AS "createdAt", last_used_at AS "lastUsedAt", transports
+         FROM webauthn_credentials WHERE user_id=$1 ORDER BY created_at`, [req.user.id]);
+    return { passkeys: rows };
+  });
+
+  app.post("/api/auth/passkeys/start", { preHandler: requireSession, ...ceremonyLimit }, async (req) => {
+    const { rows } = await q(
+      "SELECT credential_id, transports FROM webauthn_credentials WHERE user_id=$1", [req.user.id]);
+    const options = await generateRegistrationOptions({
+      rpName: "DEADP0ET.ARMY",
+      rpID: RP_ID,
+      userID: Buffer.from(req.user.id),      // same user handle as the first passkey
+      userName: req.user.handle,
+      attestationType: "none",
+      // Don't let an authenticator that already holds one register again.
+      excludeCredentials: rows.map((r) => ({
+        id: Buffer.from(r.credential_id).toString("base64url"),
+        transports: r.transports ?? undefined,
+      })),
+      authenticatorSelection: { residentKey: "preferred", userVerification: "preferred" },
+    });
+    await putChallenge(`add:${req.user.id}`, { challenge: options.challenge });
+    return { options };
+  });
+
+  app.post("/api/auth/passkeys/finish", { preHandler: requireSession }, async (req, reply) => {
+    const pending = await takeChallenge(`add:${req.user.id}`);
+    if (!pending) return reply.code(400).send({ error: "challenge expired" });
+    const v = await verifyRegistrationResponse({
+      response: req.body?.response,
+      expectedChallenge: pending.challenge,
+      expectedOrigin: RP_ORIGIN,
+      expectedRPID: RP_ID,
+    }).catch(() => ({ verified: false }));
+    if (!v.verified) return reply.code(400).send({ error: "attestation failed" });
+    const { credential } = v.registrationInfo;
+    const added = await q(
+      `INSERT INTO webauthn_credentials(user_id, credential_id, public_key, counter, transports)
+       VALUES ($1,$2,$3,$4,$5) ON CONFLICT (credential_id) DO NOTHING RETURNING id`,
+      [req.user.id, Buffer.from(credential.id, "base64url"), Buffer.from(credential.publicKey),
+       credential.counter ?? 0, credential.transports ?? null]);
+    if (!added.rowCount) return reply.code(409).send({ error: "that passkey is already registered" });
+    return { ok: true, id: added.rows[0].id };
+  });
+
+  app.post("/api/auth/passkeys/:id/remove", { preHandler: requireSession }, async (req, reply) => {
+    // Never the last one: that would lock the account out for good.
+    const out = await tx(async (c) => {
+      const { rows } = await c.query(
+        "SELECT id FROM webauthn_credentials WHERE user_id=$1 FOR UPDATE", [req.user.id]);
+      if (!rows.some((r) => r.id === req.params.id)) return 404;
+      if (rows.length === 1) return 409;
+      await c.query("DELETE FROM webauthn_credentials WHERE id=$1 AND user_id=$2", [req.params.id, req.user.id]);
+      return 200;
+    });
+    if (out === 404) return reply.code(404).send({ error: "no such passkey" });
+    if (out === 409) return reply.code(409).send({ error: "can't remove your only passkey" });
+    return { ok: true };
+  });
+
   /**
    * Delete this account. Channels it owns pass to the longest-standing admin
    * (else member); a channel with nobody else in it goes with the account.

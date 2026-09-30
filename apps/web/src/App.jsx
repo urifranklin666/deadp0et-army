@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Hash, Loader2, LogOut, Plus, Skull } from "lucide-react";
 import AuthScreen from "./AuthScreen.jsx";
+import PasskeysModal from "./Passkeys.jsx";
 import Conversation, { EmptyState } from "./Conversation.jsx";
 import { ChoiceModal, ConfirmModal, PromptModal } from "./Modal.jsx";
 import { Banner } from "./ui.jsx";
@@ -433,6 +434,7 @@ function App() {
           title="Account"
           body={'Signing out keeps this device\'s keys either way. "Everywhere" also ends every other session on your account — use it if a device is lost.'}
           choices={[
+            { label: "Passkeys…", onPick: () => { setModal({ kind: "passkeys" }); return false; } },
             { label: "Sign out", primary: true, onPick: async () => { await api.logout(); location.reload(); } },
             { label: "Sign out everywhere", onPick: async () => { await api.logoutAll(); location.reload(); } },
             { label: "Delete account…", onPick: () => { setModal({ kind: "delete" }); return false; } },
@@ -440,6 +442,8 @@ function App() {
           onClose={() => setModal(null)}
         />
       ) : null}
+
+      {modal?.kind === "passkeys" ? <PasskeysModal onClose={() => setModal(null)} /> : null}
 
       {modal?.kind === "delete" ? (
         <PromptModal

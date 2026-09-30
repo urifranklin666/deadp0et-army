@@ -40,7 +40,7 @@ async function newUser(browser, handle) {
 
   const cdp = await context.newCDPSession(page);
   await cdp.send("WebAuthn.enable");
-  await cdp.send("WebAuthn.addVirtualAuthenticator", {
+  const { authenticatorId } = await cdp.send("WebAuthn.addVirtualAuthenticator", {
     options: {
       protocol: "ctap2", transport: "internal",
       hasResidentKey: true, hasUserVerification: true,
@@ -52,7 +52,7 @@ async function newUser(browser, handle) {
   await page.getByPlaceholder("ghost_01").fill(handle);
   await page.getByRole("button", { name: "Create passkey" }).click();
   await page.getByRole("button", { name: "New channel" }).waitFor({ timeout: 90000 });
-  return Object.assign(user, { context, page, errors, handle });
+  return Object.assign(user, { context, page, errors, handle, cdp, authenticatorId });
 }
 
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
@@ -90,6 +90,29 @@ await alice.page.getByPlaceholder("ghost_01").fill(alice.handle);
 await alice.page.getByRole("button", { name: "Sign in" }).click();
 await alice.page.getByRole("button", { name: "New channel" }).waitFor({ timeout: 60000 });
 console.log("· alice signed out and back in with her passkey");
+
+// A backup passkey: add one from a second authenticator, unplug the first,
+// and sign in with only the backup present.
+await alice.page.getByRole("button", { name: "Account" }).click();
+await alice.page.getByRole("button", { name: "Passkeys…" }).click();
+await alice.page.getByText("Passkey 1").waitFor({ timeout: 15000 });
+assert.ok(await alice.page.getByRole("button", { name: "Remove passkey 1" }).isDisabled(),
+  "the only passkey can't be removed");
+const backup = await alice.cdp.send("WebAuthn.addVirtualAuthenticator", {
+  options: { protocol: "ctap2", transport: "usb", hasResidentKey: true, hasUserVerification: true,
+    isUserVerified: true, automaticPresenceSimulation: true },
+});
+await alice.cdp.send("WebAuthn.removeVirtualAuthenticator", { authenticatorId: alice.authenticatorId });
+await alice.page.getByRole("button", { name: "Add a passkey" }).click();
+await alice.page.getByText("Passkey 2").waitFor({ timeout: 30000 });
+await alice.page.keyboard.press("Escape");
+await alice.page.getByRole("button", { name: "Account" }).click();
+await alice.page.getByRole("button", { name: "Sign out", exact: true }).click();
+await alice.page.getByPlaceholder("ghost_01").fill(alice.handle);
+await alice.page.getByRole("button", { name: "Sign in" }).click();
+await alice.page.getByRole("button", { name: "New channel" }).waitFor({ timeout: 60000 });
+alice.authenticatorId = backup.authenticatorId;
+console.log("· a backup passkey from another authenticator signs alice in on its own");
 
 // Channel creation founds an MLS group client-side, then registers it.
 const slug = "room-" + rnd();
