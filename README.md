@@ -96,6 +96,17 @@ the credential of the MLS leaf that signed it, not anything the server says.
 Since anyone can write any identity into their own KeyPackage, an inviter
 refuses packages whose credential doesn't name the handle being invited.
 
+**One tab holds the keys.** Tabs of one browser share IndexedDB, so two
+tabs would each advance their own copy of the same MLS state (same ratchet
+generation twice: key and nonce reuse). An exclusive Web Lock per account
+makes any second tab stand down.
+
+**Writes happen before sends.** The advanced sending ratchet is saved before
+a ciphertext leaves, and a commit's new epoch is saved (with a note of the old
+one) before it is posted; a note left by a crash is settled against the log on
+the next open. State, cursor and transcript are always written in one
+transaction.
+
 **Group state is touched by one operation at a time.** Encrypting and applying
 both read the ratchet, await, and write it back; a sync landing mid-send could
 otherwise roll one of them back. A sender also never advances its read cursor

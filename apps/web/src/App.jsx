@@ -7,6 +7,7 @@ import { Banner } from "./ui.jsx";
 import { api } from "./lib/api.js";
 import { GroupSession, SUITE, ensureDevice } from "./lib/session.js";
 import { Hints } from "./lib/hints.js";
+import { claimTab } from "./lib/tablock.js";
 
 const SYNC_MS = 2500;
 // While the hint socket is up, the api tells us when to fetch; polling only
@@ -54,6 +55,8 @@ function App() {
 
   async function boot(h) {
     setHandle(h);
+    // Before touching any key material: another tab may already be using it.
+    if (!(await claimTab(h))) { setPhase("elsewhere"); return; }
     const { deviceId: id } = await ensureDevice(h);
     setDeviceId(id);
     const { channels: list } = await api.channels();
@@ -240,6 +243,26 @@ function App() {
   }
 
   if (phase === "auth") return <AuthScreen onAuthed={onAuthed} bootError={err} />;
+
+  if (phase === "elsewhere") {
+    return (
+      <div className="flex min-h-full items-center justify-center p-6">
+        <div className="max-w-sm text-center">
+          <Skull className="mx-auto h-8 w-8 text-rose-500" strokeWidth={1.75} />
+          <h1 className="mt-4 text-lg font-bold text-white">Open in another tab</h1>
+          <p className="mt-2 text-sm leading-relaxed text-slate-400">
+            @{handle}'s keys are in use in another tab of this browser. Two tabs would advance the
+            same encryption state separately and corrupt it, so only one may hold them. Close the
+            other tab, then reload this one.
+          </p>
+          <button onClick={() => location.reload()}
+            className="mt-5 rounded-lg border border-white/15 px-4 py-2 text-sm text-slate-200 hover:border-rose-500/50">
+            Reload
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full min-h-full flex-col bg-[#05060a] text-slate-200">

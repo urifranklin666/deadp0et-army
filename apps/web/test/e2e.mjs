@@ -105,6 +105,14 @@ const seen = await alice.page.evaluate(async (o) => {
 }, ORIGIN);
 assert.ok(seen >= 1, "channel should be listed server-side");
 
+// A second tab of the same browser shares the device's keys; it must stand
+// down rather than advance the same MLS state separately.
+const tab2 = await alice.context.newPage();
+await tab2.goto(APP, { waitUntil: "networkidle", timeout: 60000 });
+await tab2.getByText("Open in another tab").waitFor({ timeout: 30000 });
+await tab2.close();
+console.log("· a second tab stands down instead of sharing the keys");
+
 // THE persistence check: reload and confirm decrypted history is still there.
 await alice.page.reload({ waitUntil: "networkidle" });
 await alice.page.getByText(slug, { exact: true }).first().click();
