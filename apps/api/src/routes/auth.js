@@ -14,13 +14,15 @@ export { sessionUser };
 const SESSION_TTL_DAYS = 30;
 
 
-async function createSession(reply, userId) {
+async function createSession(req, reply, userId) {
   const token = crypto.randomBytes(32).toString("base64url");
   const expires = new Date(Date.now() + SESSION_TTL_DAYS * 864e5);
   // Only the hash is stored — a database leak does not yield usable sessions.
   // The passkey was proven just now: that's as fresh as a step-up.
-  await q("INSERT INTO sessions(user_id, token_hash, expires_at, reauthed_at) VALUES ($1,$2,$3, now())",
-    [userId, sha256(token), expires]);
+  await q(
+    `INSERT INTO sessions(user_id, token_hash, expires_at, reauthed_at, user_agent, last_seen_at)
+     VALUES ($1,$2,$3, now(), $4, now())`,
+    [userId, sha256(token), expires, String(req.headers["user-agent"] || "").slice(0, 300) || null]);
   reply.setCookie("dp_session", token, {
     httpOnly: true, secure: true, sameSite: "lax", path: "/", expires,
   });
@@ -157,7 +159,7 @@ export async function authRoutes(app) {
       return true;
     }).catch((e) => { if (e.code === "23505") return false; throw e; });
     if (!created) return reply.code(409).send({ error: "handle taken" });
-    await createSession(reply, userId);
+    await createSession(req, reply, userId);
     return { ok: true, userId, handle: pending.handle };
   });
 
@@ -187,7 +189,7 @@ export async function authRoutes(app) {
     if (!pending) return reply.code(400).send({ error: "challenge expired" });
     const r = await verifyAssertion(response, pending.challenge);
     if (r.error) return reply.code(r.status).send({ error: r.error });
-    await createSession(reply, r.cred.user_id);
+    await createSession(req, reply, r.cred.user_id);
     return { ok: true, handle: r.cred.handle };
   });
 
@@ -346,6 +348,28 @@ export async function authRoutes(app) {
     invalidateMembers();
     reply.clearCookie("dp_session", { path: "/" });
     return { ok: true };
+  });
+
+  // --- sessions ---
+  //
+  // Every signed-in browser holds a session. Listing them lets a user spot one
+  // they don't recognise and end just that one, rather than everything.
+
+  app.get("/api/auth/sessions", { preHandler: requireSession }, async (req) => {
+    const { rows } = await q(
+      `SELECT id, created_at AS "createdAt", last_seen_at AS "lastSeenAt", user_agent AS "userAgent"
+         FROM sessions WHERE user_id = $1 AND expires_at > now()
+        ORDER BY last_seen_at DESC NULLS LAST, created_at DESC`, [req.user.id]);
+    return { sessions: rows.map((r) => ({ ...r, current: r.id === req.user.sessionId })) };
+  });
+
+  // Ending a session only ever protects the account, so it needs no step-up.
+  app.post("/api/auth/sessions/:id/revoke", { preHandler: requireSession }, async (req, reply) => {
+    const { rowCount } = await q(
+      "DELETE FROM sessions WHERE id::text = $1 AND user_id = $2", [req.params.id, req.user.id]);
+    if (!rowCount) return reply.code(404).send({ error: "no such session" });
+    if (req.params.id === req.user.sessionId) reply.clearCookie("dp_session", { path: "/" });
+    return { ok: true, current: req.params.id === req.user.sessionId };
   });
 
   app.get("/api/auth/me", { preHandler: requireSession }, async (req) => ({ user: req.user }));

@@ -85,6 +85,24 @@ if (!process.env.AUTH_RATE_LIMIT) {
   console.log("· rate limits key on the proxy-supplied address, not a spoofed one");
 }
 
+// ---------------------------------------------------------------- sessions
+
+const sessUser = await seedUser("hk_sess");
+await q("INSERT INTO sessions(user_id, token_hash, expires_at, user_agent) VALUES ($1,$2, now() + interval '1 hour', 'Firefox')",
+  [sessUser.id, sha256("hk-sess-2")]);
+const listed = (await api(sessUser, "GET", "/api/auth/sessions")).json.sessions;
+assert.equal(listed.length, 2, "both sessions are listed");
+assert.equal(listed.filter((s) => s.current).length, 1, "exactly one is marked current");
+const otherSession = listed.find((s) => !s.current);
+assert.equal(otherSession.userAgent, "Firefox");
+assert.equal((await api(alice, "POST", `/api/auth/sessions/${otherSession.id}/revoke`, {})).status, 404,
+  "nobody ends someone else's session");
+assert.equal((await api(sessUser, "POST", `/api/auth/sessions/${otherSession.id}/revoke`, {})).status, 200);
+assert.equal((await api({ cookie: "dp_session=hk-sess-2" }, "GET", "/api/auth/me")).status, 401,
+  "the revoked session is dead");
+assert.equal((await api(sessUser, "GET", "/api/auth/me")).status, 200, "the current one lives on");
+console.log("· sessions: listed with the current one marked; one can be ended alone");
+
 // ------------------------------------------------------ sign out everywhere
 
 const multi = await seedUser("hk_multi");
@@ -416,7 +434,7 @@ hb.close(); ho.close();
 console.log("· delivery hints reach members only, and need a session and our origin");
 
 await q("DELETE FROM users WHERE handle = ANY($1)",
-  [["hk_alice", "hk_bob", "hk_expired", "hk_claimant", "hk_outsider", "hk_drainer", "hk_nosy", "hk_multi", "hk_heir", "hk_keyed"]]);
+  [["hk_alice", "hk_bob", "hk_expired", "hk_claimant", "hk_outsider", "hk_drainer", "hk_nosy", "hk_multi", "hk_heir", "hk_keyed", "hk_sess"]]);
 await pool.end();
 await closeChallenges();
 console.log("\nALL HOUSEKEEPING ASSERTIONS PASSED");

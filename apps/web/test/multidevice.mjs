@@ -83,6 +83,19 @@ await phone.page.getByRole("button", { name: "Send" }).click();
 await laptop.page.getByText(REPLY).waitFor({ timeout: 30000 });
 console.log("· both devices read each other: one account, two leaves");
 
+// The laptop sees the phone's session and ends it; the phone is signed out.
+await laptop.page.getByRole("button", { name: "Account" }).click();
+await laptop.page.getByRole("button", { name: "Sessions…" }).click();
+await laptop.page.getByText("this browser").waitFor({ timeout: 15000 });
+const ends = laptop.page.getByRole("button", { name: /^End session:/ });
+assert.equal(await ends.count(), 2, "both devices' sessions are listed");
+await laptop.page.getByRole("button", { name: /^End session: (?!.*this browser)/ }).click();
+await laptop.page.waitForFunction(() =>
+  document.querySelectorAll('[aria-label^="End session:"]').length === 1, null, { timeout: 15000 });
+await phone.page.reload({ waitUntil: "networkidle" });
+await phone.page.getByRole("button", { name: "Create passkey" }).waitFor({ timeout: 30000 });
+console.log("· the laptop ended the phone's session; the phone is signed out");
+
 const errors = [...laptop.errors, ...phone.errors];
 if (errors.length) {
   console.log("\nPAGE ERRORS:\n  " + errors.join("\n  "));
