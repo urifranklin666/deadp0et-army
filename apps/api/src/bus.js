@@ -79,6 +79,19 @@ export function subscribe(topic, fn) {
 
 export const busBackend = () => (pub ? "redis" : "memory");
 
+/**
+ * For the health check: "up" or "down" when Redis is configured, null when
+ * it isn't. With REDIS_URL set, Redis holds the WebAuthn challenges, so
+ * losing it breaks sign-in; health must say so.
+ */
+export async function redisHealth(timeoutMs = 500) {
+  if (!pub) return null;
+  let timer;
+  const late = new Promise((resolve) => { timer = setTimeout(() => resolve("down"), timeoutMs); });
+  const ping = pub.ping().then(() => "up", () => "down");
+  try { return await Promise.race([ping, late]); } finally { clearTimeout(timer); }
+}
+
 export async function closeBus() {
   for (const c of [pub, sub]) if (c) await c.quit().catch(() => c.disconnect());
 }

@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Hash, ChevronLeft, MessageSquare, PenLine, RefreshCw, Search, Send, Shield, UserPlus, Users, X } from "lucide-react";
 import Canvas from "./Canvas.jsx";
 import { api } from "./lib/api.js";
+import { Presence } from "./lib/presence.js";
 import { Button, fmtTime } from "./ui.jsx";
 
 export function EmptyState() {
@@ -120,6 +121,14 @@ const PAGE = 200;
 const matches = (m, q) => m.text !== undefined
   && (m.text.toLowerCase().includes(q) || (m.from || "").toLowerCase().includes(q));
 
+/** "alice is typing…", "alice and bob are typing…", "4 people are typing…" */
+function typingLine(handles) {
+  if (!handles.length) return "";
+  if (handles.length === 1) return `${handles[0]} is typing…`;
+  if (handles.length === 2) return `${handles[0]} and ${handles[1]} are typing…`;
+  return `${handles.length} people are typing…`;
+}
+
 /** `text` with each occurrence of `q` wrapped in <mark>. */
 function Highlight({ text, q }) {
   const lower = text.toLowerCase();
@@ -161,11 +170,30 @@ export default function Conversation({ session, onError, onChange, openModal, on
   // A removed session keeps its transcript readable but can no longer act.
   const joined = !!session.client && !session.removed;
 
+  // Who else is typing, over the sealed presence relay (never the MLS log).
+  // The canvas runs its own presence for cursors; chat needs one only while
+  // it's showing. `joined` is a dep: presence needs the group's keys.
+  const presence = useRef(null);
+  const [typers, setTypers] = useState([]);
+  useEffect(() => {
+    if (mode !== "chat" || !joined) return undefined;
+    const p = new Presence(session);
+    p.onChange = () => {
+      const handles = [...new Set([...p.typers.values()].map((t) => t.handle))]
+        .filter((h) => h && h !== session.handle);
+      setTypers((old) => (old.join("\n") === handles.join("\n") ? old : handles));
+    };
+    p.connect();
+    presence.current = p;
+    return () => { p.close(); presence.current = null; setTypers([]); };
+  }, [session, mode, joined]);
+
   const send = async () => {
     const text = draft.trim();
     if (!text || !joined) return;
     setBusy("send");
     setDraft("");
+    presence.current?.typing(false);
     try { await session.send(text); onChange(); }
     catch (e) { onError(e.message); setDraft(text); }
     finally { setBusy(null); }
@@ -313,12 +341,15 @@ export default function Conversation({ session, onError, onChange, openModal, on
       </div>
 
       <div className="shrink-0 border-t border-white/10 p-3">
+        <p aria-live="polite" className="-mt-1 mb-1 h-4 truncate font-mono text-[10px] text-slate-500">
+          {typingLine(typers)}
+        </p>
         <div className="flex items-end gap-2">
           <textarea
             rows={1}
             value={draft}
             disabled={!joined}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => { setDraft(e.target.value); presence.current?.typing(!!e.target.value.trim()); }}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
             placeholder={joined
               // The full line wraps (and clips) in a one-row box on a phone.

@@ -102,6 +102,24 @@ await bob.page.waitForFunction(
   (h) => !document.body.innerText.includes(h), alice.handle, { timeout: 30000 });
 console.log("· cursor expired after alice left the canvas");
 
+// Typing in chat is announced over the same sealed relay: alice sees bob
+// typing, sees it stop when he clears the box, and the log doesn't grow.
+await bob.page.getByRole("button", { name: "Chat" }).click();
+const box2 = bob.page.getByPlaceholder(/Encrypted before it leaves/);
+await box2.waitFor({ timeout: 30000 });
+await alice.page.waitForTimeout(1500);                // both chat sockets up
+const beforeTyping = await logLength(alice.page);
+const typingText = `${bob.handle} is typing…`;
+await box2.pressSequentially("half a thou", { delay: 60 });
+await alice.page.getByText(typingText).waitFor({ timeout: 15000 });
+console.log("· alice sees", JSON.stringify(typingText));
+await box2.fill("");
+await box2.press("Backspace");                        // fill("") alone may not fire onChange
+await alice.page.getByText(typingText).waitFor({ state: "detached", timeout: 10000 });
+console.log("· the indicator clears when bob empties the box");
+assert.equal(await logLength(alice.page), beforeTyping, "typing must not append to the MLS log");
+assert.equal(await bob.page.getByText(/is typing…/).count(), 0, "bob isn't told he is typing");
+
 const errs = [...alice.errors, ...bob.errors];
 if (errs.length) {
   console.log("\nPAGE ERRORS:\n  " + errs.join("\n  "));

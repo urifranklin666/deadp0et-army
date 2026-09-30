@@ -1,20 +1,28 @@
 /**
- * Live cursors over an ephemeral relay.
+ * Live cursors, and "typing…" in chat, over an ephemeral relay.
  *
  * Frames are sealed with a key derived from the MLS exporter, so the server
  * relays bytes it cannot read and stores none of them. Deliberately NOT MLS
  * application messages: at pointer rates those would flood the ordered log
  * and consume ratchet generations faster than peers keep skipped keys.
+ *
+ * The handle in a frame is the sender's own claim. Only group members hold
+ * the key, so a label can't come from outside the group, but one member
+ * could label their frames as another. Fine for a cursor or a typing hint;
+ * anything that matters goes through MLS, attributed by signing key.
  */
 
 const SEND_HZ = 20;
 const STALE_MS = 5000;          // no frame for this long => cursor disappears
 const RECONNECT_MS = 2000;
+const TYPING_EVERY_MS = 2000;   // re-announce while typing; STALE_MS expires it
 
 export class Presence {
   constructor(session) {
     this.session = session;
     this.peers = new Map();      // id -> { x, y, handle, at }
+    this.typers = new Map();     // id -> { handle, at }
+    this.typingSentAt = 0;       // 0: we last said we're not typing
     this.onChange = null;
     this.ws = null;
     this.closed = false;
@@ -37,7 +45,12 @@ export class Presence {
       const packet = await this.session.client.openPresence(new Uint8Array(ev.data)).catch(() => null);
       // Null means a different epoch or a frame not meant for us — ignore.
       if (!packet || !packet.id || packet.id === this.id) return;
-      this.peers.set(packet.id, { x: packet.x, y: packet.y, handle: packet.h, at: Date.now() });
+      if (packet.k === "typing") {
+        if (packet.on) this.typers.set(packet.id, { handle: packet.h, at: Date.now() });
+        else this.typers.delete(packet.id);
+      } else {
+        this.peers.set(packet.id, { x: packet.x, y: packet.y, handle: packet.h, at: Date.now() });
+      }
       this.onChange?.();
     };
     ws.onclose = (ev) => {
@@ -55,8 +68,10 @@ export class Presence {
     this.sweeper ??= setInterval(() => {
       const now = Date.now();
       let changed = false;
-      for (const [id, p] of this.peers) {
-        if (now - p.at > STALE_MS) { this.peers.delete(id); changed = true; }
+      for (const map of [this.peers, this.typers]) {
+        for (const [id, p] of map) {
+          if (now - p.at > STALE_MS) { map.delete(id); changed = true; }
+        }
       }
       if (changed) this.onChange?.();
     }, 1000);
@@ -77,13 +92,26 @@ export class Presence {
     this.#flush();
   }
 
-  async #flush() {
+  #flush() {
     const p = this.pending;
-    if (!p || !this.ws || this.ws.readyState !== 1 || !this.session.client) return;
+    if (p) this.#send({ x: p.x, y: p.y });
+  }
+
+  /**
+   * Say whether we're typing. Called on every keystroke; sends at most one
+   * frame per TYPING_EVERY_MS while typing, and one when it stops.
+   */
+  typing(on) {
+    const now = Date.now();
+    if (on ? now - this.typingSentAt < TYPING_EVERY_MS : !this.typingSentAt) return;
+    this.typingSentAt = on ? now : 0;
+    this.#send({ k: "typing", on });
+  }
+
+  async #send(frame) {
+    if (!this.ws || this.ws.readyState !== 1 || !this.session.client) return;
     try {
-      const sealed = await this.session.client.sealPresence({
-        id: this.id, h: this.session.handle, x: p.x, y: p.y,
-      });
+      const sealed = await this.session.client.sealPresence({ id: this.id, h: this.session.handle, ...frame });
       if (this.ws?.readyState === 1) this.ws.send(sealed);
     } catch { /* epoch changed mid-flight; the next frame carries the new key */ }
   }
@@ -96,5 +124,6 @@ export class Presence {
     try { this.ws?.close(); } catch { /* not open */ }
     this.ws = null;
     this.peers.clear();
+    this.typers.clear();
   }
 }

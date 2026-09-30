@@ -12,7 +12,9 @@
  *     affected sockets at the other at once. Node B's periodic recheck is
  *     set to a minute, so a prompt close can only come from the push.
  *
- * Needs REDIS_URL; without it there's only ever one node, and this skips.
+ * Needs REDIS_URL; without it there's only ever one node, and this skips —
+ * except the first check, that a node which can't reach its Redis reports
+ * itself degraded, which needs none.
  */
 import crypto from "node:crypto";
 import assert from "node:assert/strict";
@@ -21,6 +23,30 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
 import { q, pool } from "../src/db.js";
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const apiDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+// A node whose Redis is unreachable must say so at /api/health: with
+// REDIS_URL set, sign-in challenges live there. (Needs no working Redis.)
+{
+  const port = process.env.CLUSTER_DEAD_PORT || "8794";
+  const dead = spawn(process.execPath, ["src/server.js"], {
+    cwd: apiDir, env: { ...process.env, PORT: port, REDIS_URL: "redis://127.0.0.1:1/0" }, stdio: "ignore",
+  });
+  try {
+    let health = null;
+    for (let i = 0; i < 300 && !health; i++) {
+      try { health = await (await fetch(`http://127.0.0.1:${port}/api/health`)).json(); } catch { await sleep(100); }
+    }
+    assert.ok(health, "the node with a dead Redis should still answer health checks");
+    assert.equal(health.redis, "down");
+    assert.equal(health.status, "degraded", "an unreachable Redis makes the node degraded");
+    console.log("· a node that can't reach its Redis reports degraded");
+  } finally {
+    dead.kill("SIGKILL");
+  }
+}
 
 if (!process.env.REDIS_URL) {
   console.log("REDIS_URL not set: single node only, nothing to fan out — skipped");
@@ -33,9 +59,7 @@ const PORT_B = process.env.CLUSTER_PORT || "8793";
 const B = `http://127.0.0.1:${PORT_B}`;
 const ORIGIN = process.env.RP_ORIGIN;
 const sha256 = (s) => crypto.createHash("sha256").update(s).digest();
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const apiDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const nodeB = spawn(process.execPath, ["src/server.js"], {
   cwd: apiDir, env: { ...process.env, PORT: PORT_B, PRESENCE_RECHECK_MS: "60000" }, stdio: "inherit",
 });
@@ -84,6 +108,12 @@ const gid = crypto.randomBytes(16).toString("base64");
 await api(A, alice, "POST", "/api/mls/groups", { channelId: ch.id, groupId: gid, ciphersuite: "test" });
 const post = (base) => api(base, alice, "POST", `/api/mls/groups/${encodeURIComponent(gid)}/messages`,
   { senderDeviceId: dev.id, kind: "application", payload: Buffer.from("x").toString("base64") });
+
+for (const base of [A, B]) {
+  const h = await (await fetch(base + "/api/health")).json();
+  assert.equal(h.redis, "up", "nodes with a working Redis report it up");
+  assert.equal(h.status, "ok");
+}
 
 // ------------------------------------------------------------ hints
 
