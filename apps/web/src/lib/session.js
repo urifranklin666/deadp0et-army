@@ -280,7 +280,7 @@ export class GroupSession {
     this.client = await MlsClient.create(this.handle);
     await this.client.newKeyPackage();
     await this.client.createGroup(raw);
-    await api.createGroup(this.channel.id, this.groupId, SUITE);
+    await api.createGroup(this.channel.id, this.groupId, SUITE, this.deviceId);
     await this.#persist();
     return true;
   }
@@ -595,7 +595,9 @@ export class GroupSession {
     // A commit must be built against the group's CURRENT epoch or the server
     // refuses it, so catch up on anyone else's commits first.
     await this.#drain();
-    const { keyPackages } = await api.claimKeyPackages(handle, SUITE);
+    // Only devices not already in this group — which also makes inviting
+    // your own handle the way to bring a new device of yours in.
+    const { keyPackages } = await api.claimKeyPackages(handle, SUITE, this.groupId);
     // Whatever a KeyPackage's credential says is what every member will see
     // on that member's messages, and its owner chose it. Refuse any that
     // don't name the person we meant to invite.

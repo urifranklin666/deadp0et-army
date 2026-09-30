@@ -159,10 +159,26 @@ export async function mlsRoutes(app) {
     const suite = req.query?.ciphersuite;
     if (!suite) return reply.code(400).send({ error: "ciphersuite query param required" });
 
-    const { rows: devs } = await q(
+    const { rows: allDevs } = await q(
       `SELECT d.id FROM devices d JOIN users u ON u.id=d.user_id WHERE u.handle=$1`,
       [req.params.handle]);
-    if (!devs.length) return reply.code(404).send({ error: "no devices for handle" });
+    if (!allDevs.length) return reply.code(404).send({ error: "no devices for handle" });
+
+    // Claiming for a specific group skips devices already in it, so an invite
+    // adds only the devices that are missing — a user's new phone, say —
+    // instead of giving existing ones a second leaf.
+    let devs = allDevs;
+    if (req.query?.group) {
+      const g = await groupMembership(req.user.id, req.query.group);
+      if (!g) return reply.code(404).send({ error: "no such group" });
+      const { rows: inGroup } = await q(
+        "SELECT device_id FROM mls_group_devices WHERE group_id=$1", [g.group_id]);
+      const skip = new Set(inGroup.map((r) => r.device_id));
+      devs = allDevs.filter((d) => !skip.has(d.id));
+      if (!devs.length) {
+        return reply.code(409).send({ error: `every device of ${req.params.handle} is already in this group` });
+      }
+    }
 
     const { rows: [held] } = await q(
       `SELECT count(*)::int AS n FROM mls_key_packages
@@ -195,7 +211,7 @@ export async function mlsRoutes(app) {
   // ---------------------------------------------------------------- groups
 
   app.post("/api/mls/groups", { preHandler: requireSession }, async (req, reply) => {
-    const { channelId, groupId, ciphersuite } = req.body || {};
+    const { channelId, groupId, ciphersuite, deviceId } = req.body || {};
     if (!channelId || !groupId || !ciphersuite) {
       return reply.code(400).send({ error: "channelId, groupId and ciphersuite required" });
     }
@@ -203,12 +219,20 @@ export async function mlsRoutes(app) {
       "SELECT 1 FROM channel_members WHERE channel_id=$1 AND user_id=$2", [channelId, req.user.id]);
     if (!member.rowCount) return reply.code(403).send({ error: "not a member of that channel" });
 
+    // The founding device holds the group's first leaf.
+    const founder = deviceId ? await ownedDevice(req.user.id, deviceId) : null;
     try {
-      const { rows } = await q(
-        `INSERT INTO mls_groups(channel_id, group_id, ciphersuite, created_by, epoch)
-         VALUES ($1,$2,$3,$4,0) RETURNING id, epoch`,
-        [channelId, unb64(groupId), ciphersuite, req.user.id]);
-      return { id: rows[0].id, epoch: Number(rows[0].epoch) };
+      return await tx(async (c) => {
+        const { rows } = await c.query(
+          `INSERT INTO mls_groups(channel_id, group_id, ciphersuite, created_by, epoch)
+           VALUES ($1,$2,$3,$4,0) RETURNING id, epoch`,
+          [channelId, unb64(groupId), ciphersuite, req.user.id]);
+        if (founder) {
+          await c.query("INSERT INTO mls_group_devices(group_id, device_id) VALUES ($1,$2)",
+            [unb64(groupId), founder]);
+        }
+        return { id: rows[0].id, epoch: Number(rows[0].epoch) };
+      });
     } catch (e) {
       if (e.code === "23505") return reply.code(409).send({ error: "group already exists for that channel" });
       throw e;
@@ -365,6 +389,9 @@ export async function mlsRoutes(app) {
             `INSERT INTO mls_device_cursors(group_id, device_id, last_seq)
              VALUES ($1,$2,$3) ON CONFLICT (group_id, device_id) DO NOTHING`,
             [g.group_id, w.deviceId, seq]);
+          await c.query(
+            `INSERT INTO mls_group_devices(group_id, device_id) VALUES ($1,$2)
+             ON CONFLICT DO NOTHING`, [g.group_id, w.deviceId]);
         }
         return { seq, epoch: writeEpoch };
       });

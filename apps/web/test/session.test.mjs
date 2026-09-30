@@ -112,6 +112,10 @@ assert.equal(B.history.find((h) => h.text === "from alice").from, alice.handle,
 assert.equal(errors(B).length, 0);
 console.log("· sending never skips another member's unfetched message");
 
+as(alice);
+await assert.rejects(A.invite(bob.handle), /already in this group/,
+  "re-inviting someone whose devices are all in the group should say so, not add duplicates");
+
 // ---------------------------------------- concurrent send + sync is safe
 
 as(alice);

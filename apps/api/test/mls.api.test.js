@@ -147,6 +147,22 @@ await must(bob, "POST", `/api/mls/devices/${bDev}/welcomes/ack`, { ids: [inbox.w
 assert.equal(A.epoch, B.epoch, "alice and bob must agree on the epoch");
 console.log("· bob joined from welcome; both at epoch", B.epoch);
 
+// Bob gets a second device. Claiming for this group must hand out only the
+// new one — his first device already holds a leaf here.
+const bDev2 = await registerDevice(bob, "bob-phone");
+const B2 = await MlsClient.create("mls_bob");
+const kp2 = await B2.newKeyPackage();
+await must(bob, "POST", "/api/mls/key-packages", {
+  deviceId: bDev2, ciphersuite: SUITE, keyPackages: [{ ref: b64(kp2.ref), keyPackage: b64(kp2.encoded) }] });
+const forGroup = await must(alice, "GET",
+  `/api/mls/key-packages/mls_bob?ciphersuite=${encodeURIComponent(SUITE)}&group=${GID}`);
+assert.deepEqual(forGroup.keyPackages.map((k) => k.deviceId), [bDev2],
+  "a group-scoped claim should skip devices already in the group");
+const none = await api(alice, "GET",
+  `/api/mls/key-packages/mls_bob?ciphersuite=${encodeURIComponent(SUITE)}&group=${GID}`);
+assert.equal(none.status, 409, "with every device in the group, there is nothing to claim");
+console.log("· group-scoped claims skip devices that already hold a leaf");
+
 const acked = await must(bob, "GET", `/api/mls/devices/${bDev}/welcomes`);
 assert.equal(acked.welcomes.length, 0, "acked welcome must not be redelivered");
 

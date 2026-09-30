@@ -243,7 +243,7 @@ function App() {
             s.groupId = ch.groupId;
             const joined = await s.tryJoin();
             if (!joined) {
-              setErr("This device has no key material for that channel yet. Ask a member to invite it.");
+              setErr("This device has no key material for that channel yet. Ask a member to invite it — or invite your own handle from one of your devices that is in it.");
             }
           }
         }
@@ -471,7 +471,7 @@ function App() {
           title={`Invite to #${modal.session.channel.slug}`}
           label="Handle"
           placeholder="ghost_01"
-          hint="They must have signed in at least once, so a key package exists to claim."
+          hint="They must have signed in at least once, so a key package exists to claim. Only devices not already in the channel are added — invite your own handle to bring in a new device of yours."
           submitLabel="Invite"
           validate={(v) => (v && !/^[a-z0-9_]{3,32}$/.test(v) ? "Only a-z, 0-9 and underscore." : null)}
           onSubmit={async (h) => {
@@ -687,6 +687,7 @@ function Conversation({ session, onError, onChange, openModal }) {
           <p className="mx-auto max-w-sm text-center text-[11px] leading-relaxed text-slate-600">
             This device isn't a member yet. Once someone invites you, the Welcome arrives on the
             next poll and history starts from that point — earlier traffic stays unreadable, by design.
+            If another of your devices is in this channel, invite your own handle from there.
           </p>
         ) : session.history.length === 0 ? (
           <p className="mx-auto max-w-sm text-center text-[11px] text-slate-600">
