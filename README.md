@@ -221,6 +221,7 @@ node apps/web/test/e2e.mjs              # passkey → channel → message → re
 node apps/web/test/canvas.mjs           # CRDT convergence, late-joiner snapshot
 node apps/web/test/presence.mjs         # live cursors, log stays untouched
 node apps/web/test/mobile.mjs           # console at 390px: one pane at a time, no overflow
+node apps/web/test/multidevice.mjs      # synced passkey on a 2nd device, self-invite, both read
 node apps/site/test/funnel.mjs          # marketing → console handoff
 ```
 
