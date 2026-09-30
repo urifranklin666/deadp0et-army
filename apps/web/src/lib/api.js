@@ -27,18 +27,33 @@ export const api = {
   health: () => call("GET", "/api/health"),
   me: () => call("GET", "/api/auth/me"),
   logout: () => call("POST", "/api/auth/logout"),
+  logoutAll: () => call("POST", "/api/auth/logout-all"),
+  deleteAccount: () => call("POST", "/api/auth/delete"),
+  passkeys: () => call("GET", "/api/auth/passkeys"),
+  removePasskey: (id) => call("POST", `/api/auth/passkeys/${encodeURIComponent(id)}/remove`),
 
   channels: () => call("GET", "/api/channels"),
   createChannel: (slug, kind) => call("POST", "/api/channels", { slug, kind }),
+  setRole: (channelId, handle, role) =>
+    call("POST", `/api/channels/${encodeURIComponent(channelId)}/members/${encodeURIComponent(handle)}/role`, { role }),
+  leave: (channelId) => call("POST", `/api/channels/${encodeURIComponent(channelId)}/leave`),
+  members: (channelId) => call("GET", `/api/channels/${encodeURIComponent(channelId)}/members`),
 
   registerDevice: (name, identity) => call("POST", "/api/mls/devices", { name, identity }),
   publishKeyPackages: (deviceId, ciphersuite, keyPackages) =>
     call("POST", "/api/mls/key-packages", { deviceId, ciphersuite, keyPackages }),
-  claimKeyPackages: (handle, ciphersuite) =>
-    call("GET", `/api/mls/key-packages/${encodeURIComponent(handle)}?ciphersuite=${encodeURIComponent(ciphersuite)}`),
+  registerSignatureKey: (keyPackage) => call("POST", "/api/mls/signature-keys", { keyPackage }),
+  identities: (keys) => call("POST", "/api/mls/identities", { keys }),
+  reportEvicted: (groupId, deviceId) =>
+    call("POST", `/api/mls/groups/${encodeURIComponent(groupId)}/evicted`, { deviceId }),
+  evicted: (groupId) => call("GET", `/api/mls/groups/${encodeURIComponent(groupId)}/evicted`),
+  keyPackageStatus: (deviceId) => call("GET", `/api/mls/devices/${deviceId}/key-packages`),
+  claimKeyPackages: (handle, ciphersuite, groupId) =>
+    call("GET", `/api/mls/key-packages/${encodeURIComponent(handle)}?ciphersuite=${encodeURIComponent(ciphersuite)}`
+      + (groupId ? `&group=${encodeURIComponent(groupId)}` : "")),
 
-  createGroup: (channelId, groupId, ciphersuite) =>
-    call("POST", "/api/mls/groups", { channelId, groupId, ciphersuite }),
+  createGroup: (channelId, groupId, ciphersuite, deviceId) =>
+    call("POST", "/api/mls/groups", { channelId, groupId, ciphersuite, deviceId }),
   group: (groupId) => call("GET", `/api/mls/groups/${encodeURIComponent(groupId)}`),
   postMessage: (groupId, payload) =>
     call("POST", `/api/mls/groups/${encodeURIComponent(groupId)}/messages`, payload),

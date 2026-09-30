@@ -1,10 +1,6 @@
 import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { pool, q } from "./db.js";
-
-const here = path.dirname(fileURLToPath(import.meta.url));
-const dir = path.resolve(here, "../migrations");
+import { migrationFiles } from "./config.js";
 
 await q(`CREATE TABLE IF NOT EXISTS schema_migrations (
   name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now()
@@ -13,12 +9,11 @@ await q(`CREATE TABLE IF NOT EXISTS schema_migrations (
 const applied = new Set(
   (await q("SELECT name FROM schema_migrations")).rows.map((r) => r.name)
 );
-const files = fs.readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();
 
 let ran = 0;
-for (const f of files) {
+for (const { name: f, path: file } of migrationFiles()) {
   if (applied.has(f)) continue;
-  const sql = fs.readFileSync(path.join(dir, f), "utf8");
+  const sql = fs.readFileSync(file, "utf8");
   const c = await pool.connect();
   try {
     await c.query("BEGIN");

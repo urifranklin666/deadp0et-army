@@ -12,7 +12,7 @@ Live at [deadp0et.army](https://deadp0et.army) — console at `/app`.
 
 ```
 apps/api        Fastify + Postgres + Redis. Key directory, ciphertext relay,
-                MLS delivery service, ephemeral presence relay.
+                MLS delivery service, ephemeral presence relay, delivery hints.
 apps/web        The console: passkey auth, encrypted chat, collaborative canvas.
 apps/site       Marketing site (deadp0et.army).
 packages/crypto Isomorphic MLS client — same code in Node and the browser.
@@ -63,17 +63,71 @@ cannot both win, or the group forks into histories that can never reconcile.
 a snapshot supersedes, so it prunes strictly below the slowest active device's
 reported cursor. Commits are never pruned. Devices silent past 30 days stop
 pinning the log, and a `compaction_watermark` lets the read path answer
-`gap: true` rather than let a returning device diverge in silence.
+`gap: true` rather than let a returning device diverge in silence. A device
+told it has a gap drops its board and asks the group for a snapshot; the
+client lets MLS ratchet far past the library's default 200-generation limit,
+because a gap can be hundreds of messages from one sender.
 
 **A Welcome is a grant, so it is checked.** Being welcomed materialises
 channel membership, so the server only accepts a Welcome naming a KeyPackage
-that was actually claimed from the target device. It also seeds that device's
+the committer itself claimed from the target device — and each claim backs
+one Welcome, never a replay. It also seeds that device's
 delivery cursor at the add commit, so compaction cannot prune past a joiner
 who has not come online yet.
 
 **KeyPackages are a pool.** Each is single-use, so every device keeps a few
 published (topped up when it runs low) and opens a Welcome with the private
 half matching the ref it was addressed to. One package would mean one group.
+A founder's leaf comes from a fresh package that is never published, and a
+claimer may hold only a few unused claims against any one user, so nobody can
+drain someone else's pool.
+
+**Removal is a commit plus a revocation.** An owner or admin removes someone
+with an MLS remove commit, so the next epoch's keys never reach them; the same
+request names them so the server drops their channel membership, delivery
+cursors and pending Welcomes in that transaction. The server cannot check that
+the opaque commit really removes who it names, which is why only owners and
+admins may send one.
+
+Leaving works the other way round. A member cannot commit its own removal, so
+`leave` ends their server access and wipes the group from their device, and
+the next owner/admin client to reconcile the MLS tree against the channel
+roster commits the removal of the leftover leaf.
+
+**Passkey changes need a fresh passkey.** A session cookie lasts 30 days, so
+adding or removing a passkey, or deleting the account, also requires an
+assertion from one of the account's passkeys within the last five minutes:
+a stolen session alone can't lock the owner out or destroy the account.
+
+**Deleting an account retires its handle.** Channels it owns pass to the
+longest-standing admin (else member); ones with nobody else in them are
+deleted; the browser wipes every key it held for the handle. Handles are how
+members recognise each other, so a deleted one can never be registered again.
+
+**Messages are attributed by signing key, not by credential.** A leaf's
+credential is a name its owner wrote, and a modified client can put anyone's
+name there. What it can't fake is the key that signs its messages, which MLS
+verifies. So the server keeps a directory of signature keys, each recorded
+from an authenticated upload of a KeyPackage whose signatures verify under
+that key (proof the uploader holds it) and whose credential names the
+uploader, and clients name every message's sender by looking up its signing
+key. Devices register their own leaf the same way when they open a group, so
+leaves that were never uploaded (older groups' founders) get covered too. A
+credential that disagrees is shown as a false claim next to the real owner;
+a key nobody registered is shown as unverified. (Inviters also refuse
+KeyPackages that don't name who they meant to invite.) The directory is the
+server's word, like the KeyPackages it hands out.
+
+**One tab holds the keys.** Tabs of one browser share IndexedDB, so two
+tabs would each advance their own copy of the same MLS state (same ratchet
+generation twice: key and nonce reuse). An exclusive Web Lock per account
+makes any second tab stand down.
+
+**Writes happen before sends.** The advanced sending ratchet is saved before
+a ciphertext leaves, and a commit's new epoch is saved (with a note of the old
+one) before it is posted; a note left by a crash is settled against the log on
+the next open. State, cursor and transcript are always written in one
+transaction.
 
 **Group state is touched by one operation at a time.** Encrypting and applying
 both read the ratchet, await, and write it back; a sync landing mid-send could
@@ -81,12 +135,52 @@ otherwise roll one of them back. A sender also never advances its read cursor
 to its own new message — that would skip whatever others posted in between,
 which can never be fetched again.
 
+**Hidden is not deleted.** Every read filters expired rows, and a sweep then
+removes them: expired sessions and application messages, envelopes a day after
+they are acked, used Welcomes and claimed KeyPackages after a grace period.
+Commits are never swept.
+
+**Delivery is pushed, fetching is not.** Each tab holds one `/api/live`
+socket; when a message lands in one of the user's groups (or a Welcome is
+addressed to one of their devices) the api sends a hint — group and seq,
+which it already knows — and the client fetches. Nothing in a hint is
+trusted, and polling continues every 20s as a fallback, so a lost hint costs
+latency, never data.
+
 **Presence is deliberately outside MLS.** Cursors move at pointer rates;
 routing them through application messages would outrun receivers' skipped-key
 window and grow the ordered log without bound. They are sealed instead under a
 key from the MLS exporter (RFC 9420 §8.5) — same key for every member of an
 epoch, new key on epoch change — and relayed over a WebSocket that persists
-nothing.
+nothing. Each socket re-checks its session and membership every minute, so
+logging out or leaving a channel also stops the frames.
+
+**The console ships a Content-Security-Policy.** It holds private keys in
+IndexedDB, so injected script is key theft. The build adds a meta CSP
+allowing only its own scripts and same-origin connections; e2e checks it
+blocks an injected inline script. `frame-ancestors` can't be set from a meta
+tag, so nginx should send it as a header.
+
+**Removals are audited and, if undeclared, healed.** Every client records
+"X removed Y" when it applies a commit that removes someone, naming X by
+signing key. Owner and admin clients reconcile the MLS tree against the
+roster both ways: leaves of people who left are pruned, and anyone the roster
+lists but the tree lacks is re-added. A device that finds itself removed from
+the group's encryption forgets the group and can rejoin from a new Welcome.
+
+## Known limits
+
+- **Removal authorization binds honest clients only.** Commits are MLS
+  *private* messages, opaque to the server. It checks the `removes` a commit
+  declares, but cannot see the proposals inside, so a modified client could
+  commit a removal without declaring it. Every other client records who did
+  it, and owner/admin clients put the member back, but the removal still
+  takes effect until then. Preventing it outright means sending handshake
+  messages as MLS public messages so the server can check proposals against
+  roles.
+- **ts-mls must be ≥ 1.6.4.** Earlier versions omit the UpdatePath from a
+  commit removing a single member, which lets that member derive the next
+  epoch and keep reading. The session suite fails on those versions.
 
 ## Development
 
@@ -96,6 +190,11 @@ node apps/api/src/migrate.js     # apply migrations
 pnpm --filter api start          # :8790
 pnpm --filter web dev            # :5173, proxies /api
 ```
+
+The api trusts `X-Forwarded-For` only from loopback proxies (nginx on the
+same host); set `TRUST_PROXY` (an address or CIDR) if the proxy lives
+elsewhere. Trusting every hop would let clients choose their own rate-limit
+bucket.
 
 Requires Postgres and Redis, and a `.env` at the repo root (never committed):
 
@@ -114,22 +213,46 @@ it, so passkeys cannot be exercised from `localhost` against a production
 ## Tests
 
 Backend suites drive the real HTTP API; browser suites drive a real Chromium
-against the live origin with a CDP virtual WebAuthn authenticator. The session
-suite needs no browser: it seeds sessions in Postgres and runs `session.js`
-in Node over an in-memory IndexedDB.
+with a CDP virtual WebAuthn authenticator, against a local stack or the live
+origin. The session suite needs no browser: it seeds sessions in Postgres and
+runs `session.js` in Node over an in-memory IndexedDB, with crashes and lost
+responses injected where they matter.
 
 ```bash
+pnpm lint                               # undefined/unused identifiers, hook rules
+pnpm test                               # every suite below that runs locally
+```
+
+`pnpm test` starts its own api on port 8791 with test-friendly limits, runs the
+backend and session suites against it, and stops it — Postgres with migrations
+applied is all it needs. `pnpm test:browser` does the same for the browser
+suites: the console's production build (`vite preview`, CSP included) on
+`localhost:5174` with WebAuthn pinned to `localhost`, and the site on
+`localhost:5175` proxying `/app` and `/api` the way nginx does. Set
+`CHROMIUM_PATH` to use a Chromium other than Playwright's. CI runs lint and
+both. The browser suites also run against production with
+`ORIGIN=https://deadp0et.army`.
+
+```bash
+node apps/api/test/mls.spike.js         # ts-mls itself: PQ group, add, one ciphertext for all
+node packages/crypto/test/membership.test.js  # removed can't read on; joiners can't read back
 node apps/api/test/e2ee.test.js         # PQXDH handshake + relay
 node apps/api/test/mls.api.test.js      # delivery service + fork guard
 node apps/api/test/compaction.test.js   # prune safety
-node apps/web/test/session.test.mjs     # client MLS bookkeeping, against the local api
-node apps/web/test/e2e.mjs              # passkey → channel → message → reload
+node apps/api/test/housekeeping.test.js # retention, rate limits, sockets, roles, passkeys, deletion
+node apps/web/test/session.test.mjs     # client MLS bookkeeping: races, crashes, removal, gaps
+node apps/web/test/e2e.mjs              # passkeys, CSP, chat, members, remove, account
 node apps/web/test/canvas.mjs           # CRDT convergence, late-joiner snapshot
 node apps/web/test/presence.mjs         # live cursors, log stays untouched
+node apps/web/test/mobile.mjs           # console at 390px: one pane at a time, no overflow
+node apps/web/test/multidevice.mjs      # synced passkey on a 2nd device, self-invite, both read
 node apps/site/test/funnel.mjs          # marketing → console handoff
 ```
 
 ## Deploy
+
+Run `pnpm migrate` before starting a new api build; until every migration on
+disk is applied, `/api/health` reports `degraded` and names the missing ones.
 
 Each Cloudflare tunnel forwards to nginx, which routes on `Host`, so adding a
 domain never touches a tunnel.

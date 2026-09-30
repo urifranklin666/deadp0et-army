@@ -1,10 +1,5 @@
+import "./env.js";
 import pg from "pg";
-import dotenv from "dotenv";
-import { fileURLToPath } from "node:url";
-import path from "node:path";
-
-const here = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.resolve(here, "../../../.env") });
 
 if (!process.env.DATABASE_URL) {
   throw new Error("DATABASE_URL missing — is .env present at the repo root?");

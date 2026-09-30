@@ -2,7 +2,7 @@ import { chromium } from "playwright";
 const SP = process.env.SP;
 const APP = "https://deadp0et.army/app/";
 const rnd = () => Math.random().toString(36).slice(2, 7);
-const b = await chromium.launch();
+const b = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
 
 // auth screen
 const c1 = await b.newContext({ viewport: { width: 1280, height: 800 } });

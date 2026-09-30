@@ -1,155 +1,21 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import {
-  AlertTriangle, Check, Fingerprint, Hash, KeyRound, Loader2, LogOut, Plus,
-  MessageSquare, PenLine, RefreshCw, Send, Shield, Skull, UserPlus, X,
-} from "lucide-react";
-import Canvas from "./Canvas.jsx";
-import { ConfirmModal, PromptModal } from "./Modal.jsx";
+import { Hash, Loader2, LogOut, Plus, Skull } from "lucide-react";
+import AuthScreen from "./AuthScreen.jsx";
+import PasskeysModal from "./Passkeys.jsx";
+import Conversation, { EmptyState } from "./Conversation.jsx";
+import { ChoiceModal, ConfirmModal, PromptModal } from "./Modal.jsx";
+import { Banner } from "./ui.jsx";
 import { api } from "./lib/api.js";
-import { store, K } from "./lib/db.js";
-import { GroupSession, SUITE, ensureDevice, login, register } from "./lib/session.js";
+import { belongsTo, store } from "./lib/db.js";
+import { GroupSession, SUITE, ensureDevice, withReauth } from "./lib/session.js";
+import { Hints } from "./lib/hints.js";
+import { claimTab } from "./lib/tablock.js";
 
 const SYNC_MS = 2500;
-const BUILD = "2026-07-26.6";
-
-/* ------------------------------------------------------------ primitives */
-
-function Glass({ className = "", children }) {
-  const positioned = /(^|\s)(absolute|fixed|sticky)(\s|$)/.test(className);
-  return (
-    <div className={`${positioned ? "" : "relative "}rounded-xl border border-white/10 bg-white/[0.035] backdrop-blur-xl ${className}`}>
-      {children}
-    </div>
-  );
-}
-
-function Button({ children, icon: Icon, busy, variant = "primary", className = "", ...rest }) {
-  const skins = {
-    primary: "bg-gradient-to-r from-rose-600 to-red-700 text-white shadow-[0_0_30px_-10px_rgba(244,63,94,0.9)] hover:-translate-y-0.5",
-    ghost: "border border-white/15 bg-white/5 text-slate-200 hover:border-rose-500/50 hover:text-white",
-  };
-  return (
-    <button
-      {...rest}
-      disabled={busy || rest.disabled}
-      className={`inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold
-        transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400
-        disabled:cursor-not-allowed disabled:opacity-40 ${skins[variant]} ${className}`}
-    >
-      {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : Icon ? <Icon className="h-4 w-4" /> : null}
-      {children}
-    </button>
-  );
-}
-
-function Banner({ kind = "error", children, onClose }) {
-  const skins = {
-    error: "border-rose-500/40 bg-rose-950/40 text-rose-200",
-    info: "border-cyan-500/30 bg-cyan-950/30 text-cyan-200",
-    ok: "border-emerald-500/30 bg-emerald-950/30 text-emerald-200",
-  };
-  return (
-    <div className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-xs ${skins[kind]}`}>
-      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-      <span className="min-w-0 flex-1 break-words">{children}</span>
-      {onClose ? (
-        <button onClick={onClose} className="shrink-0 opacity-60 hover:opacity-100" aria-label="Dismiss">
-          <X className="h-3.5 w-3.5" />
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------- auth gate */
-
-function AuthScreen({ onAuthed, bootError }) {
-  const [handle, setHandle] = useState("");
-  const [busy, setBusy] = useState(null);
-  const [localErr, setLocalErr] = useState(null);
-  // A failure *after* the passkey succeeds (device or key-package setup) must
-  // not vanish just because we fell back to this screen.
-  const err = localErr || bootError;
-  const setErr = setLocalErr;
-
-  const run = async (fn, mode) => {
-    setErr(null);
-    setBusy(mode);
-    try {
-      const res = await fn(handle.trim().toLowerCase());
-      onAuthed(res.handle || handle.trim().toLowerCase());
-    } catch (e) {
-      // WebAuthn rejections are noisy DOMExceptions; make them legible.
-      const msg = e.name === "NotAllowedError"
-        ? "Passkey prompt dismissed or timed out."
-        : e.message || String(e);
-      setErr(msg);
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const valid = /^[a-z0-9_]{3,32}$/.test(handle.trim().toLowerCase());
-
-  return (
-    <div className="flex min-h-full items-center justify-center p-6">
-      <div aria-hidden className="pointer-events-none fixed inset-0">
-        <div className="absolute -left-24 top-10 h-96 w-96 rounded-full bg-rose-600/15 blur-[130px]" />
-        <div className="absolute -right-24 bottom-10 h-96 w-96 rounded-full bg-fuchsia-600/10 blur-[130px]" />
-      </div>
-
-      <Glass className="w-full max-w-md p-8">
-        <div className="flex items-center gap-2.5">
-          <span className="flex h-9 w-9 items-center justify-center rounded-lg border border-rose-500/40 bg-rose-600/10">
-            <Skull className="h-5 w-5 text-rose-400" strokeWidth={1.75} />
-          </span>
-          <span className="text-sm font-black tracking-[0.2em] text-white">
-            DEADP0ET<span className="text-rose-500">.ARMY</span>
-          </span>
-        </div>
-
-        <h1 className="mt-6 text-2xl font-black tracking-tight text-white">Console access</h1>
-        <p className="mt-1.5 text-sm text-slate-400">
-          Passkey only. There is no password to steal, phish, or reuse.
-        </p>
-
-        <label htmlFor="handle" className="mt-6 block text-[11px] uppercase tracking-widest text-slate-500">
-          Handle
-        </label>
-        <input
-          id="handle"
-          value={handle}
-          onChange={(e) => setHandle(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && valid) run(login, "login"); }}
-          placeholder="ghost_01"
-          autoComplete="username webauthn"
-          spellCheck={false}
-          className="mt-2 w-full rounded-lg border border-white/10 bg-black/50 px-3 py-2.5 font-mono text-sm text-white
-            outline-none transition-colors placeholder:text-slate-600 focus:border-rose-500/60"
-        />
-        <p className="mt-1.5 text-[11px] text-slate-600">3–32 chars: a–z, 0–9, underscore.</p>
-
-        {err ? <div className="mt-4"><Banner onClose={() => setErr(null)}>{err}</Banner></div> : null}
-
-        <div className="mt-6 flex gap-2">
-          <Button icon={Fingerprint} busy={busy === "login"} disabled={!valid || busy}
-            onClick={() => run(login, "login")} className="flex-1">
-            Sign in
-          </Button>
-          <Button icon={KeyRound} variant="ghost" busy={busy === "register"} disabled={!valid || busy}
-            onClick={() => run(register, "register")} className="flex-1">
-            Create passkey
-          </Button>
-        </div>
-
-        <p className="mt-6 border-t border-white/10 pt-4 text-[11px] leading-relaxed text-slate-600">
-          Keys are generated on this device and never leave it. Clearing site data for this
-          origin destroys your group history — we cannot restore it, which is rather the point.
-        </p>
-      </Glass>
-    </div>
-  );
-}
+// While the hint socket is up, the api tells us when to fetch; polling only
+// covers a hint that got lost.
+const FALLBACK_MS = 20_000;
+const BUILD = typeof __BUILD__ === "string" ? __BUILD__ : "dev";  // set by vite.config.js
 
 /* -------------------------------------------------------------- main app */
 
@@ -159,11 +25,16 @@ function App() {
   const [deviceId, setDeviceId] = useState(null);
   const [channels, setChannels] = useState([]);
   const [active, setActive] = useState(null);     // GroupSession
-  const [tick, setTick] = useState(0);            // forces re-render on sync
+  const [, setTick] = useState(0);            // forces re-render on sync
   const [err, setErr] = useState(null);
   const [notice, setNotice] = useState(null);
   const [busy, setBusy] = useState(null);
   const sessions = useRef(new Map());
+  const notifiedWelcomes = useRef(new Set());
+  const hints = useRef(null);
+  const [unread, setUnread] = useState(() => new Set());   // groupIds with news we haven't opened
+  const activeRef = useRef(null);
+  activeRef.current = active;
   const [modal, setModal] = useState(null);
 
   const bump = useCallback(() => setTick((t) => t + 1), []);
@@ -182,11 +53,12 @@ function App() {
       }
     })();
     return () => { dead = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function boot(h) {
     setHandle(h);
+    // Before touching any key material: another tab may already be using it.
+    if (!(await claimTab(h))) { setPhase("elsewhere"); return; }
     const { deviceId: id } = await ensureDevice(h);
     setDeviceId(id);
     const { channels: list } = await api.channels();
@@ -209,10 +81,18 @@ function App() {
 
   async function openChannel(ch) {
     setErr(null);
+    if (ch.groupId) {
+      setUnread((u) => { if (!u.has(ch.groupId)) return u; const n = new Set(u); n.delete(ch.groupId); return n; });
+    }
     let s = sessions.current.get(ch.id);
-    if (!s) {
-      s = new GroupSession(handle, deviceId, ch);
-      sessions.current.set(ch.id, s);
+    // A cached session without MLS state is one whose join (or founding)
+    // didn't happen yet — typically opened before the Welcome arrived. Retry
+    // rather than leaving the channel stuck until a reload.
+    if (!s || !s.client) {
+      if (!s) {
+        s = new GroupSession(handle, deviceId, ch);
+        sessions.current.set(ch.id, s);
+      }
       try {
         if (!ch.groupId) {
           // Channel exists with no MLS group yet — we found it.
@@ -225,7 +105,7 @@ function App() {
             s.groupId = ch.groupId;
             const joined = await s.tryJoin();
             if (!joined) {
-              setErr("This device has no key material for that channel yet. Ask a member to invite it.");
+              setErr("This device has no key material for that channel yet. Ask a member to invite it — or invite your own handle from one of your devices that is in it.");
             }
           }
         }
@@ -250,49 +130,132 @@ function App() {
       setActive(s);
       setNotice(`#${ch.slug} created — you are its only member until you invite someone.`);
       bump();
-    } catch (e) {
-      throw e;               // surfaced inline by the modal
-    } finally {
+    } finally {                // errors surface inline in the modal
       setBusy(null);
     }
   }
 
   /* ---------------------------------------------------------- background */
 
-  // Poll for pending Welcomes so an invited device joins without a reload.
+  // One hint socket per signed-in tab.
+  useEffect(() => {
+    if (phase !== "ready") return undefined;
+    const h = new Hints();
+    h.connect();
+    hints.current = h;
+    // News for a channel that isn't on screen marks it unread.
+    h.on((hint) => {
+      if (hint.t !== "log" || hint.g === activeRef.current?.groupId) return;
+      setUnread((u) => (u.has(hint.g) ? u : new Set(u).add(hint.g)));
+    });
+    return () => { h.close(); if (hints.current === h) hints.current = null; };
+  }, [phase]);
+
+  // Check for pending Welcomes — on a hint, or on a (slow, if hinted) poll —
+  // so an invited device joins without a reload.
   useEffect(() => {
     if (phase !== "ready" || !deviceId) return;
     let dead = false;
-    const id = setInterval(async () => {
+    let last = 0;
+    const check = async () => {
+      last = Date.now();
       try {
+        // Evicted devices whose report to the server didn't get through.
+        for (const s of sessions.current.values()) {
+          if (s.removed && s.groupId) s.retryEvictionReport().catch(() => {});
+        }
         const { welcomes } = await api.welcomes(deviceId);
         if (dead || !welcomes.length) return;
+
+        // A Welcome for a group this device already holds state for was
+        // joined, but its ack never landed (the save happens first, then the
+        // ack). Ack it now, or it lingers forever.
+        // Only Welcomes at or before the session's cursor: a newer one may be
+        // re-adding a device that hasn't yet seen the commit removing it.
+        const done = welcomes.filter((w) =>
+          [...sessions.current.values()].some((s) => s.client && s.groupId === w.groupId
+            && w.joinedAtSeq != null && w.joinedAtSeq <= s.cursor));
+        if (done.length) {
+          await api.ackWelcomes(deviceId, done.map((w) => w.id)).catch(() => {});
+          done.forEach((w) => notifiedWelcomes.current.add(w.id));
+        }
+
+        // A session already open on a group we've just been welcomed into
+        // (the user was looking at it, waiting) joins straight away.
+        const joined = new Set();
+        for (const s of sessions.current.values()) {
+          if (s.client || !s.groupId || !welcomes.some((w) => w.groupId === s.groupId)) continue;
+          if (await s.tryJoin().catch(() => false)) joined.add(s.groupId);
+        }
+        if (dead) return;
+        if (joined.size) { setErr(null); bump(); }
+
+        // Announce each Welcome once, not on every poll until it's accepted —
+        // and not at all for the ones just joined above.
+        const fresh = welcomes.filter((w) => !notifiedWelcomes.current.has(w.id));
+        if (!fresh.length) return;
+        fresh.forEach((w) => notifiedWelcomes.current.add(w.id));
         const { channels: list } = await api.channels();
         if (dead) return;
         setChannels(list);
-        setNotice(`Invited to ${welcomes.length} group${welcomes.length > 1 ? "s" : ""} — open it to join.`);
+        const pending = fresh.filter((w) => !joined.has(w.groupId)).length;
+        if (pending) {
+          setNotice(`Invited to ${pending} group${pending > 1 ? "s" : ""} — open it to join.`);
+        }
       } catch { /* transient */ }
+    };
+    const id = setInterval(() => {
+      if (hints.current?.connected && Date.now() - last < FALLBACK_MS) return;
+      check();
     }, SYNC_MS * 2);
-    return () => { dead = true; clearInterval(id); };
+    const off = hints.current?.on((h) => { if (h.t === "welcome") check(); });
+    return () => { dead = true; clearInterval(id); off?.(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, deviceId]);
 
   // Drain the active group's log.
   useEffect(() => {
     if (!active || !active.client) return;
     let dead = false;
+    let last = 0;
+    // Coalesce: a burst of hints (someone drawing flushes ~4/s) becomes one
+    // fetch in flight plus at most one more, not a queued GET per hint.
+    let inFlight = false;
+    let again = false;
     const pull = async () => {
+      if (inFlight) { again = true; return; }
+      inFlight = true;
+      last = Date.now();
       try {
-        const { applied } = await active.sync();
-        if (!dead && applied) bump();
+        const { applied, removed } = await active.sync();
+        if (dead) return;
+        if (removed) {
+          // Access is gone server-side; polling again would only 404.
+          clearInterval(id);
+          const { channels: list } = await api.channels().catch(() => ({ channels: null }));
+          if (!dead && list) setChannels(list);
+          bump();
+          return;
+        }
+        if (applied) bump();
       } catch (e) {
         if (!dead) setErr(e.message);
+      } finally {
+        inFlight = false;
+        if (again && !dead) { again = false; pull(); }
       }
     };
     pull();
-    const id = setInterval(pull, SYNC_MS);
-    return () => { dead = true; clearInterval(id); };
+    const id = setInterval(() => {
+      if (hints.current?.connected && Date.now() - last < FALLBACK_MS) return;
+      pull();
+    }, SYNC_MS);
+    const off = hints.current?.on((h) => { if (h.t === "log" && h.g === active.groupId) pull(); });
+    return () => { dead = true; clearInterval(id); off?.(); };
+    // `active.client` is in the deps so a session that joins while selected
+    // (Welcome arrived after it was opened) starts syncing without a reselect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, tick === 0]);
+  }, [active, active?.client]);
 
   /* --------------------------------------------------------------- views */
 
@@ -309,6 +272,26 @@ function App() {
 
   if (phase === "auth") return <AuthScreen onAuthed={onAuthed} bootError={err} />;
 
+  if (phase === "elsewhere") {
+    return (
+      <div className="flex min-h-full items-center justify-center p-6">
+        <div className="max-w-sm text-center">
+          <Skull className="mx-auto h-8 w-8 text-rose-500" strokeWidth={1.75} />
+          <h1 className="mt-4 text-lg font-bold text-white">Open in another tab</h1>
+          <p className="mt-2 text-sm leading-relaxed text-slate-400">
+            @{handle}'s keys are in use in another tab of this browser. Two tabs would advance the
+            same encryption state separately and corrupt it, so only one may hold them. Close the
+            other tab, then reload this one.
+          </p>
+          <button onClick={() => location.reload()}
+            className="mt-5 rounded-lg border border-white/15 px-4 py-2 text-sm text-slate-200 hover:border-rose-500/50">
+            Reload
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full min-h-full flex-col bg-[#05060a] text-slate-200">
       <header className="flex shrink-0 items-center gap-3 border-b border-white/10 px-4 py-2.5">
@@ -323,9 +306,9 @@ function App() {
           <span className="hidden font-mono text-[10px] text-slate-600 sm:inline">build {BUILD}</span>
           <span className="font-mono text-[11px] text-slate-500">@{handle}</span>
           <button
-            onClick={async () => { await api.logout(); location.reload(); }}
+            onClick={() => setModal({ kind: "signout" })}
             className="rounded-lg border border-white/10 p-1.5 text-slate-400 hover:text-white"
-            aria-label="Sign out"
+            aria-label="Account"
           >
             <LogOut className="h-4 w-4" />
           </button>
@@ -334,7 +317,8 @@ function App() {
 
       <div className="flex min-h-0 flex-1">
         {/* channels */}
-        <aside className="flex w-56 shrink-0 flex-col border-r border-white/10">
+        {/* Phones show the list OR the open channel; md+ shows both. */}
+        <aside className={`${active ? "hidden md:flex" : "flex"} w-full shrink-0 flex-col border-white/10 md:w-56 md:border-r`}>
           <div className="flex items-center justify-between px-3 py-2.5">
             <span className="text-[10px] uppercase tracking-widest text-slate-500">Channels</span>
             <button onClick={() => setModal({ kind: "channel" })} disabled={busy === "create"}
@@ -353,14 +337,17 @@ function App() {
                 className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition-colors
                   ${active?.channel?.id === ch.id ? "bg-rose-600/15 text-white" : "text-slate-400 hover:bg-white/5"}`}>
                 <Hash className="h-3.5 w-3.5 shrink-0 opacity-60" />
-                <span className="truncate">{ch.slug}</span>
+                <span className={`truncate ${unread.has(ch.groupId) ? "font-semibold text-white" : ""}`}>{ch.slug}</span>
+                {unread.has(ch.groupId) ? (
+                  <span className="ml-auto h-2 w-2 shrink-0 rounded-full bg-rose-500" aria-label="unread" />
+                ) : null}
               </button>
             ))}
           </div>
         </aside>
 
         {/* conversation */}
-        <main className="flex min-w-0 flex-1 flex-col">
+        <main className={`${active ? "flex" : "hidden md:flex"} min-w-0 flex-1 flex-col`}>
           {(err || notice) ? (
             <div className="space-y-2 px-4 pt-3">
               {err ? <Banner onClose={() => setErr(null)}>{err}</Banner> : null}
@@ -368,7 +355,8 @@ function App() {
             </div>
           ) : null}
           {active ? (
-            <Conversation session={active} onError={setErr} onChange={bump} openModal={setModal} />
+            <Conversation session={active} onError={setErr} onChange={bump} openModal={setModal}
+              onBack={() => setActive(null)} />
           ) : <EmptyState />}
         </main>
       </div>
@@ -391,13 +379,92 @@ function App() {
           title={`Invite to #${modal.session.channel.slug}`}
           label="Handle"
           placeholder="ghost_01"
-          hint="They must have signed in at least once, so a key package exists to claim."
+          hint="They must have signed in at least once, so a key package exists to claim. Only devices not already in the channel are added — invite your own handle to bring in a new device of yours."
           submitLabel="Invite"
           validate={(v) => (v && !/^[a-z0-9_]{3,32}$/.test(v) ? "Only a-z, 0-9 and underscore." : null)}
           onSubmit={async (h) => {
             const n = await modal.session.invite(h);
             bump();
             setNotice(`Invited ${h} (${n} device${n > 1 ? "s" : ""}). They join on their next poll.`);
+          }}
+          onClose={() => setModal(null)}
+        />
+      ) : null}
+
+      {modal?.kind === "remove" ? (
+        <ConfirmModal
+          title={`Remove ${modal.handle}`}
+          body={`${modal.handle} loses access to #${modal.session.channel.slug} and cannot read anything sent from now on. What they already received stays on their devices.`}
+          confirmLabel="Remove"
+          danger
+          onConfirm={async () => {
+            try {
+              await modal.session.remove(modal.handle);
+              bump();
+              setNotice(`Removed ${modal.handle} from #${modal.session.channel.slug}.`);
+            } catch (e) {
+              setErr(e.message);
+              throw e;
+            }
+          }}
+          onClose={() => setModal(null)}
+        />
+      ) : null}
+
+      {modal?.kind === "leave" ? (
+        <ConfirmModal
+          title={`Leave #${modal.session.channel.slug}`}
+          body="You lose access immediately, and this device forgets the channel's keys and history. Only an invite can bring you back."
+          confirmLabel="Leave"
+          danger
+          onConfirm={async () => {
+            const s = modal.session;
+            try {
+              await s.leave();
+            } catch (e) {
+              setErr(e.message);
+              throw e;
+            }
+            sessions.current.delete(s.channel.id);
+            setChannels((list) => list.filter((c) => c.id !== s.channel.id));
+            setActive((a) => (a === s ? null : a));
+            setNotice(`Left #${s.channel.slug}.`);
+          }}
+          onClose={() => setModal(null)}
+        />
+      ) : null}
+
+      {modal?.kind === "signout" ? (
+        // This device keeps its keys either way: signing back in picks up
+        // where it left off.
+        <ChoiceModal
+          title="Account"
+          body={'Signing out keeps this device\'s keys either way. "Everywhere" also ends every other session on your account — use it if a device is lost.'}
+          choices={[
+            { label: "Passkeys…", onPick: () => { setModal({ kind: "passkeys" }); return false; } },
+            { label: "Sign out", primary: true, onPick: async () => { await api.logout(); location.reload(); } },
+            { label: "Sign out everywhere", onPick: async () => { await api.logoutAll(); location.reload(); } },
+            { label: "Delete account…", onPick: () => { setModal({ kind: "delete" }); return false; } },
+          ]}
+          onClose={() => setModal(null)}
+        />
+      ) : null}
+
+      {modal?.kind === "passkeys" ? <PasskeysModal onClose={() => setModal(null)} /> : null}
+
+      {modal?.kind === "delete" ? (
+        <PromptModal
+          title="Delete account"
+          label={`Type ${handle} to confirm`}
+          placeholder={handle}
+          hint="Your passkey stops working here, this browser forgets every key, and the handle is retired for good. Channels you own pass to an admin or the longest-standing member; ones with nobody else in them are deleted."
+          submitLabel="Delete for good"
+          validate={(v) => (v && v !== handle ? `Type ${handle} exactly.` : null)}
+          onSubmit={async (v) => {
+            if (v !== handle) throw new Error(`Type ${handle} to confirm.`);
+            await withReauth(() => api.deleteAccount());
+            await store.deleteWhere(belongsTo(handle));
+            location.reload();
           }}
           onClose={() => setModal(null)}
         />
@@ -414,140 +481,6 @@ function App() {
         />
       ) : null}
     </div>
-  );
-}
-
-function EmptyState() {
-  return (
-    <div className="flex flex-1 items-center justify-center p-8 text-center">
-      <div className="max-w-sm">
-        <Shield className="mx-auto h-8 w-8 text-slate-700" />
-        <p className="mt-3 text-sm text-slate-500">Pick a channel, or create one.</p>
-        <p className="mt-1 text-[11px] leading-relaxed text-slate-600">
-          Each channel is an MLS group. Messages are encrypted once for the whole group and the
-          server stores only ciphertext it cannot read.
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function Conversation({ session, onError, onChange, openModal }) {
-  const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(null);
-  const [mode, setMode] = useState(session.channel.kind === "canvas" ? "canvas" : "chat");
-  const endRef = useRef(null);
-
-  useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [session.history.length]);
-
-  const joined = !!session.client;
-
-  const send = async () => {
-    const text = draft.trim();
-    if (!text || !joined) return;
-    setBusy("send");
-    setDraft("");
-    try { await session.send(text); onChange(); }
-    catch (e) { onError(e.message); setDraft(text); }
-    finally { setBusy(null); }
-  };
-
-  const invite = () => openModal({ kind: "invite", session });
-
-  return (
-    <>
-      <div className="flex shrink-0 items-center gap-3 border-b border-white/10 px-4 py-2.5">
-        <Hash className="h-4 w-4 text-slate-600" />
-        <span className="text-sm font-semibold text-white">{session.channel.slug}</span>
-        <span className="rounded border border-white/10 px-1.5 py-0.5 font-mono text-[10px] text-slate-500">
-          epoch {session.epoch ?? "—"}
-        </span>
-
-        <div className="ml-4 flex rounded-lg border border-white/10 bg-white/5 p-0.5">
-          {[["chat", "Chat", MessageSquare], ["canvas", "Canvas", PenLine]].map(([id, label, Icon]) => (
-            <button key={id} onClick={() => setMode(id)}
-              className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors
-                ${mode === id ? "bg-rose-600 text-white" : "text-slate-400 hover:text-white"}`}>
-              <Icon className="h-3 w-3" />{label}
-            </button>
-          ))}
-        </div>
-
-        <div className="ml-auto flex items-center gap-2">
-          <button onClick={async () => { try { await session.sync(); onChange(); } catch (e) { onError(e.message); } }}
-            className="rounded p-1.5 text-slate-500 hover:bg-white/5 hover:text-white" aria-label="Sync">
-            <RefreshCw className="h-3.5 w-3.5" />
-          </button>
-          <Button icon={UserPlus} variant="ghost" disabled={!joined}
-            onClick={invite} className="!px-3 !py-1.5 !text-xs">
-            Invite
-          </Button>
-        </div>
-      </div>
-
-      {mode === "canvas" ? <Canvas session={session} onError={onError} openModal={openModal} /> : (
-      <>
-      <div className="dp-scroll min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        {!joined ? (
-          <p className="mx-auto max-w-sm text-center text-[11px] leading-relaxed text-slate-600">
-            This device isn't a member yet. Once someone invites you, the Welcome arrives on the
-            next poll and history starts from that point — earlier traffic stays unreadable, by design.
-          </p>
-        ) : session.history.length === 0 ? (
-          <p className="mx-auto max-w-sm text-center text-[11px] text-slate-600">
-            Nothing here yet. Say something unwise.
-          </p>
-        ) : (
-          <ul className="space-y-2">
-            {session.history.map((m) => (
-              <li key={m.seq} className="animate-[dp-rise_0.25s_ease-out_both]">
-                {m.notice ? (
-                  <div className="flex items-start gap-2 rounded-lg border border-cyan-500/25 bg-cyan-950/20 px-3 py-2 text-[11px] text-cyan-200">
-                    <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
-                    <span>{m.notice}</span>
-                  </div>
-                ) : m.error ? (
-                  <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-950/20 px-3 py-2 text-[11px] text-amber-300">
-                    <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
-                    <span>seq {m.seq}: undecryptable — {m.error}</span>
-                  </div>
-                ) : (
-                  <div className={`flex ${m.mine ? "justify-end" : "justify-start"}`}>
-                    <div className={`max-w-[75%] rounded-xl px-3 py-2 text-sm
-                      ${m.mine ? "bg-rose-600/25 text-rose-50" : "border border-white/10 bg-white/[0.04] text-slate-200"}`}>
-                      <p className="whitespace-pre-wrap break-words">{m.text}</p>
-                      <p className="mt-1 font-mono text-[9px] text-slate-500">#{m.seq}</p>
-                    </div>
-                  </div>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
-        <div ref={endRef} />
-      </div>
-
-      <div className="shrink-0 border-t border-white/10 p-3">
-        <div className="flex items-end gap-2">
-          <textarea
-            rows={1}
-            value={draft}
-            disabled={!joined}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-            placeholder={joined ? "Encrypted before it leaves this tab…" : "Not a member yet"}
-            className="dp-scroll max-h-32 min-h-[38px] flex-1 resize-none rounded-lg border border-white/10 bg-black/50
-              px-3 py-2 text-sm text-white outline-none transition-colors placeholder:text-slate-600
-              focus:border-rose-500/60 disabled:opacity-50"
-          />
-          <Button icon={Send} busy={busy === "send"} disabled={!joined || !draft.trim()} onClick={send}>
-            Send
-          </Button>
-        </div>
-      </div>
-      </>
-      )}
-    </>
   );
 }
 

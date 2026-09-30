@@ -21,7 +21,7 @@ import "@noble/post-quantum/ml-dsa.js";
 
 import {
   getCiphersuiteFromName, nobleCryptoProvider,
-  generateKeyPackage, createGroup, createCommit, joinGroup,
+  generateKeyPackage, generateKeyPackageWithKey, createGroup, createCommit, joinGroup,
   createApplicationMessage, processPrivateMessage,
   encodeMlsMessage, decodeMlsMessage,
   encodeGroupState, decodeGroupState, mlsExporter,
@@ -29,6 +29,9 @@ import {
   defaultKeyRetentionConfig, defaultLifetimeConfig, defaultKeyPackageEqualityConfig,
   defaultPaddingConfig, defaultAuthenticationService,
 } from "ts-mls";
+// Not re-exported from the index, but a public subpath ("./*.js" in ts-mls's
+// exports map). Needed to learn WHICH member sent an application message.
+import { decryptSenderData } from "ts-mls/privateMessage.js";
 
 /**
  * ClientState is GroupState & { clientConfig }, but encodeGroupState only
@@ -39,7 +42,13 @@ import {
  * reaching into a deep subpath.
  */
 const CLIENT_CONFIG = {
-  keyRetentionConfig: defaultKeyRetentionConfig,
+  // ts-mls refuses to ratchet more than 200 generations forward in one go.
+  // Compaction can prune far more than that from under a device that was
+  // away (a minute of drawing is ~250 canvas messages), and then even the
+  // snapshot sent to rescue it is undecryptable. Each step is one HKDF, so
+  // 100k is a second or two, paid once after a long gap. Retained skipped
+  // keys stay capped at the default, so memory doesn't grow with the gap.
+  keyRetentionConfig: { ...defaultKeyRetentionConfig, maximumForwardRatchetSteps: 100_000 },
   lifetimeConfig: defaultLifetimeConfig,
   keyPackageEqualityConfig: defaultKeyPackageEqualityConfig,
   paddingConfig: defaultPaddingConfig,
@@ -81,6 +90,19 @@ export const unb64 = (s) => {
 const utf8 = new TextEncoder();
 const fromUtf8 = (u8) => new TextDecoder().decode(u8);
 
+/**
+ * The identity a KeyPackage's credential claims. Anyone can write any
+ * identity into their own KeyPackage, so an inviter must check this against
+ * the handle they meant to add — otherwise a member could join as someone
+ * else, and every message they sent would be attributed to that someone.
+ */
+export function keyPackageIdentity(encoded) {
+  const msg = decode(encoded);
+  if (msg.wireformat !== "mls_key_package") throw new Error("not a key package");
+  const cred = msg.keyPackage.leafNode.credential;
+  return cred.credentialType === "basic" ? fromUtf8(cred.identity) : null;
+}
+
 /** Stable identifier for a KeyPackage, used to address its Welcome. */
 export async function keyPackageRef(encoded) {
   const digest = await crypto.subtle.digest("SHA-256", encoded);
@@ -105,6 +127,8 @@ export class MlsClient {
   }
 
   get epoch() { return this.#state ? Number(this.#state.groupContext.epoch) : null; }
+  /** False once a commit has removed this member: it can't follow the group any further. */
+  get active() { return !!this.#state && this.#state.groupActiveState?.kind !== "removedFromGroup"; }
   get groupId() { return this.#state ? this.#state.groupContext.groupId : null; }
 
   /** Generate a KeyPackage and keep its private half locally. */
@@ -120,7 +144,9 @@ export class MlsClient {
   /** Found a new group; this client becomes its first member. */
   async createGroup(groupId) {
     if (!this.#kp) throw new Error("call newKeyPackage() first");
-    this.#state = await createGroup(groupId, this.#kp.publicPackage, this.#kp.privatePackage, [], this.#cs);
+    // Our config, not the library default, from the first epoch on.
+    this.#state = { ...await createGroup(groupId, this.#kp.publicPackage, this.#kp.privatePackage, [], this.#cs),
+      clientConfig: CLIENT_CONFIG };
     return this.#state;
   }
 
@@ -130,12 +156,22 @@ export class MlsClient {
    * The caller is responsible for submitting these AT the epoch they were
    * built against — the server rejects a commit for a superseded epoch.
    */
-  async addMembers(encodedKeyPackages) {
+  async addMembers(encodedKeyPackages, { replacing = [] } = {}) {
     const proposals = encodedKeyPackages.map((bytes) => {
       const msg = decode(bytes);
       if (msg.wireformat !== "mls_key_package") throw new Error("not a key package");
       return { proposalType: "add", add: { keyPackage: msg.keyPackage } };
     });
+    // Old leaves of the people being (re-)added — e.g. someone who left and
+    // whose leaf was never pruned — go in the same commit, so they don't keep
+    // receiving epoch secrets alongside the new ones.
+    const wanted = new Set(replacing);
+    const own = this.#state.privatePath?.leafIndex;
+    for (const m of this.members()) {
+      if (wanted.has(m.identity) && m.leafIndex !== own) {
+        proposals.push({ proposalType: "remove", remove: { removed: m.leafIndex } });
+      }
+    }
     const builtAtEpoch = this.epoch;
     const res = await createCommit(
       { state: this.#state, cipherSuite: this.#cs },
@@ -148,13 +184,61 @@ export class MlsClient {
     };
   }
 
+  /**
+   * A KeyPackage signed with THIS member's current leaf signature key: proof,
+   * for the server's key directory, that we hold it. Used to register leaves
+   * that were never uploaded as packages (older groups' founders).
+   */
+  async leafKeyProof() {
+    const own = this.#state.privatePath.leafIndex;
+    const leaf = this.#state.ratchetTree[own * 2]?.leaf;
+    const kp = await generateKeyPackageWithKey(
+      { credentialType: "basic", identity: utf8.encode(this.identity) },
+      defaultCapabilities(), defaultLifetime, [],
+      { signKey: this.#state.signaturePrivateKey, publicKey: leaf.signaturePublicKey }, this.#cs);
+    return encodeMlsMessage({ version: MLS_VERSION, wireformat: "mls_key_package", keyPackage: kp.publicPackage });
+  }
+
+  /** Every occupied leaf in the current epoch, with its credential identity. */
+  members() {
+    if (!this.#state) return [];
+    const out = [];
+    this.#state.ratchetTree.forEach((node, i) => {
+      if (i % 2 || node?.nodeType !== "leaf") return;   // leaves sit at even node indices
+      const cred = node.leaf.credential;
+      out.push({ leafIndex: i / 2, identity: cred.credentialType === "basic" ? fromUtf8(cred.identity) : null });
+    });
+    return out;
+  }
+
+  /**
+   * Commit the removal of every leaf whose credential names `identity` — a
+   * handle, or an array of them (one leaf per device). The removed members never learn the next epoch's secrets,
+   * so nothing sent after this commit is readable to them. As with adds, the
+   * caller must submit the commit at the epoch it was built against.
+   */
+  async removeMembers(identity) {
+    const wanted = new Set([].concat(identity));
+    const own = this.#state.privatePath?.leafIndex;
+    const leaves = this.members().filter((m) => wanted.has(m.identity) && m.leafIndex !== own);
+    if (!leaves.length) throw new Error(`${[...wanted].join(", ")} is not in this group`);
+    const builtAtEpoch = this.epoch;
+    const res = await createCommit(
+      { state: this.#state, cipherSuite: this.#cs },
+      { extraProposals: leaves.map((m) => ({ proposalType: "remove", remove: { removed: m.leafIndex } })),
+        ratchetTreeExtension: true });
+    this.#state = res.newState;
+    return { builtAtEpoch, commit: encodeMlsMessage(res.commit), removed: leaves.length };
+  }
+
   /** Join from a Welcome produced by someone else's add commit. */
   async joinFromWelcome(encodedWelcome) {
     if (!this.#kp) throw new Error("call newKeyPackage() first");
     const msg = decode(encodedWelcome);
     if (msg.wireformat !== "mls_welcome") throw new Error("not a welcome");
-    this.#state = await joinGroup(
-      msg.welcome, this.#kp.publicPackage, this.#kp.privatePackage, emptyPskIndex, this.#cs);
+    this.#state = { ...await joinGroup(
+      msg.welcome, this.#kp.publicPackage, this.#kp.privatePackage, emptyPskIndex, this.#cs),
+      clientConfig: CLIENT_CONFIG };
     return this.#state;
   }
 
@@ -171,11 +255,62 @@ export class MlsClient {
    * applied in server `seq` order.
    */
   async apply(encoded) {
+    return (await this.applyWithSender(encoded)).text;
+  }
+
+  /**
+   * apply(), plus the identity of the member who sent it.
+   *
+   * `sender` is the credential identity of the sending leaf, and
+   * `senderKey` (base64) that leaf's signature key. Processing verifies the
+   * content's signature against that key, so the KEY is authenticated; the
+   * credential is only what the leaf's owner wrote, and can be rewritten by
+   * a modified client. Attribute by the key (see the session's directory
+   * lookup). Both are null for commits/proposals or when unresolvable.
+   */
+  async applyWithSender(encoded) {
     const msg = decode(encoded);
-    if (msg.wireformat !== "mls_private_message") return null;
+    if (msg.wireformat !== "mls_private_message") return { text: null, sender: null };
+    const type = msg.privateMessage.contentType;
+    // Application messages and commits are attributed (a commit can remove
+    // people, and who did it matters); proposals aren't worth the extra
+    // sender-data decryption.
+    const who = type === "application" || type === "commit"
+      ? await this.#senderOf(msg.privateMessage).catch(() => null)
+      : null;
+    const before = type === "commit" ? this.members() : null;
     const res = await processPrivateMessage(this.#state, msg.privateMessage, emptyPskIndex, this.#cs);
     this.#state = res.newState;
-    return res.kind === "applicationMessage" ? fromUtf8(res.message) : null;
+    const sender = who?.identity ?? null;
+    const senderKey = who?.key ?? null;
+    if (res.kind === "applicationMessage") return { text: fromUtf8(res.message), sender, senderKey };
+    if (!before) return { text: null, sender: null, senderKey: null };
+    // What the commit changed, by leaf: gone, or newly occupied.
+    const after = this.members();
+    const was = new Map(before.map((m) => [m.leafIndex, m.identity]));
+    const now = new Map(after.map((m) => [m.leafIndex, m.identity]));
+    const removed = before.filter((m) => now.get(m.leafIndex) !== m.identity).map((m) => m.identity);
+    const added = after.filter((m) => was.get(m.leafIndex) !== m.identity).map((m) => m.identity);
+    return { text: null, sender, senderKey, removed, added };
+  }
+
+  /** Resolve a private message's sending leaf to its credential identity. */
+  async #senderOf(pm) {
+    const s = this.#state;
+    // Messages from the current epoch use its secrets; a straggler from an
+    // earlier one uses whatever ts-mls kept for that epoch.
+    const data = BigInt(pm.epoch) === BigInt(s.groupContext.epoch)
+      ? { senderDataSecret: s.keySchedule.senderDataSecret, ratchetTree: s.ratchetTree }
+      : s.historicalReceiverData?.get(pm.epoch);
+    if (!data) return null;
+    const sd = await decryptSenderData(pm, data.senderDataSecret, this.#cs);
+    const node = sd && data.ratchetTree[sd.leafIndex * 2];   // leaf i lives at node 2i
+    if (node?.nodeType !== "leaf") return null;
+    const cred = node.leaf.credential;
+    return {
+      identity: cred.credentialType === "basic" ? fromUtf8(cred.identity) : null,
+      key: b64(node.leaf.signaturePublicKey),
+    };
   }
 
   // -------------------------------------------------------------- presence

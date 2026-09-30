@@ -11,13 +11,6 @@
     "@fastify/cookie": "^11.0.2",
     "@fastify/rate-limit": "^10.2.0",
     "@fastify/websocket": "^11.0.1",
-    "@simplewebauthn/server": "^13.3.2",
-    "dotenv": "^16.4.7",
-    "fastify": "^5.2.0",
-    "ioredis": "^5.4.2",
-    "pg": "^8.13.1"
-  },
-  "devDependencies": {
     "@hpke/chacha20poly1305": "^1.8.0",
     "@hpke/core": "^1.9.0",
     "@hpke/dhkem-x25519": "^1.8.0",
@@ -26,7 +19,15 @@
     "@noble/curves": "^2.2.0",
     "@noble/hashes": "^2.2.0",
     "@noble/post-quantum": "^0.6.1",
+    "@simplewebauthn/server": "^13.3.2",
+    "dotenv": "^16.4.7",
+    "fastify": "^5.12.5",
+    "ioredis": "^5.4.2",
+    "pg": "^8.13.1",
+    "ts-mls": "^1.6.4"
+  },
+  "devDependencies": {
     "@signalapp/libsignal-client": "^0.99.1",
-    "ts-mls": "^1.6.2"
+    "ws": "^8.21.1"
   }
 }

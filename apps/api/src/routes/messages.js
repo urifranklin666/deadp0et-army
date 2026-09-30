@@ -1,5 +1,7 @@
 import { q, tx } from "../db.js";
 import { requireSession } from "./auth.js";
+import { revokeAccess } from "../membership.js";
+import { invalidateMembers } from "./notify.js";
 
 const b64 = (buf) => Buffer.from(buf).toString("base64");
 const unb64 = (s) => Buffer.from(String(s), "base64");
@@ -29,7 +31,7 @@ export async function messageRoutes(app) {
       return rows[0];
     });
     if (!ch) return reply.code(409).send({ error: "slug taken" });
-    return ch;
+    return { ...ch, role: "owner" };   // same shape as GET /api/channels
   });
 
   app.get("/api/channels", { preHandler: requireSession }, async (req) => {
@@ -45,6 +47,55 @@ export async function messageRoutes(app) {
         WHERE m.user_id = $1
         ORDER BY c.created_at DESC`, [req.user.id]);
     return { channels: rows.map((r) => ({ ...r, epoch: r.epoch === null ? null : Number(r.epoch) })) };
+  });
+
+  // Leave a channel. Access to its ciphertext ends now; the MLS leaf is
+  // removed by the next owner/admin client that reconciles the group against
+  // this roster (a member cannot commit its own removal).
+  app.post("/api/channels/:id/leave", { preHandler: requireSession }, async (req, reply) => {
+    const out = await tx(async (c) => {
+      const { rows } = await c.query(
+        "SELECT role FROM channel_members WHERE channel_id=$1 AND user_id=$2 FOR UPDATE",
+        [req.params.id, req.user.id]);
+      if (!rows.length) return 404;
+      if (rows[0].role === "owner") return 409;
+      await revokeAccess(c, req.params.id, req.user.id);
+      return 200;
+    });
+    if (out === 404) return reply.code(404).send({ error: "not a member" });
+    if (out === 409) return reply.code(409).send({ error: "the owner cannot leave their own channel" });
+    invalidateMembers();   // leaving is rare; forget every cached roster
+    return { ok: true };
+  });
+
+  // Promote a member to admin, or back. Owner only; the owner's own role is
+  // not changeable here. Admins may remove members (see mls.js).
+  app.post("/api/channels/:id/members/:handle/role", { preHandler: requireSession }, async (req, reply) => {
+    const role = req.body?.role;
+    if (!["admin", "member"].includes(role)) return reply.code(400).send({ error: "role must be admin or member" });
+    const { rows: [me] } = await q(
+      "SELECT role FROM channel_members WHERE channel_id=$1 AND user_id=$2", [req.params.id, req.user.id]);
+    if (!me) return reply.code(404).send({ error: "no such channel" });
+    if (me.role !== "owner") return reply.code(403).send({ error: "only the owner can change roles" });
+    const { rowCount } = await q(
+      `UPDATE channel_members m SET role = $3 FROM users u
+        WHERE m.channel_id = $1 AND m.user_id = u.id AND u.handle = $2 AND m.role <> 'owner'`,
+      [req.params.id, req.params.handle, role]);
+    if (!rowCount) return reply.code(404).send({ error: "no such member" });
+    return { ok: true, role };
+  });
+
+  // Who is in a channel. Members only — the roster is itself sensitive.
+  app.get("/api/channels/:id/members", { preHandler: requireSession }, async (req, reply) => {
+    const { rows } = await q(
+      `SELECT u.handle, m.role, m.joined_at AS "joinedAt"
+         FROM channel_members m JOIN users u ON u.id = m.user_id
+        WHERE m.channel_id = $1
+          AND EXISTS (SELECT 1 FROM channel_members me
+                       WHERE me.channel_id = $1 AND me.user_id = $2)
+        ORDER BY m.joined_at`, [req.params.id, req.user.id]);
+    if (!rows.length) return reply.code(404).send({ error: "no such channel" });
+    return { members: rows };
   });
 
   // Deliver one ciphertext per recipient device.

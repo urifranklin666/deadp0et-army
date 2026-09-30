@@ -1,9 +1,18 @@
 import { q, tx } from "../db.js";
 import { requireSession } from "./auth.js";
+import { revokeAccess } from "../membership.js";
+import { hintGroup, hintWelcome, invalidateMembers } from "./notify.js";
+import { verifiedKeyPackage } from "../keypackages.js";
 
 const b64 = (buf) => Buffer.from(buf).toString("base64");
 const unb64 = (s) => Buffer.from(String(s), "base64");
 const MAX_PAYLOAD = 512 * 1024;
+// Claimed-but-never-welcomed packages one user may hold against another's
+// devices within CLAIM_WINDOW. A real invite uses its claim within seconds.
+const MAX_OUTSTANDING_CLAIMS = Number(process.env.KP_MAX_OUTSTANDING) || 3;
+const CLAIM_WINDOW = "1 hour";
+// A claim with no Welcome after this long never will; the device may forget it.
+const STALE_CLAIM = "1 day";
 
 /** Confirm the caller owns this device; returns its id or null. */
 async function ownedDevice(userId, deviceId) {
@@ -14,13 +23,33 @@ async function ownedDevice(userId, deviceId) {
 /** Confirm the caller is a member of the channel backing this group. */
 async function groupMembership(userId, groupIdB64) {
   const { rows } = await q(
-    `SELECT g.group_id, g.epoch, g.ciphersuite, g.channel_id, g.compaction_watermark
+    `SELECT g.group_id, g.epoch, g.ciphersuite, g.channel_id, g.compaction_watermark, m.role
        FROM mls_groups g
        JOIN channel_members m ON m.channel_id = g.channel_id
       WHERE g.group_id = $1 AND m.user_id = $2`,
     [unb64(groupIdB64), userId]
   );
   return rows[0] ?? null;
+}
+
+/** Record that `userId` owns this signature key (see migration 009). */
+export async function registerSignatureKey(c, signatureKey, userId) {
+  // Callers have verified possession of the key, so a proven registration
+  // wins over whatever row was there.
+  await c.query(
+    `INSERT INTO mls_signature_keys(signature_key, user_id) VALUES ($1,$2)
+     ON CONFLICT (signature_key) DO UPDATE SET user_id = EXCLUDED.user_id`,
+    [signatureKey, userId]);
+}
+
+async function keyPackageStatus(deviceId) {
+  const { rows: [r] } = await q(
+    `SELECT count(*) FILTER (WHERE claimed_at IS NULL)::int AS available,
+            coalesce(array_agg(encode(ref, 'base64')) FILTER (
+              WHERE claimed_at < now() - $2::interval AND welcomed_at IS NULL), '{}') AS stale
+       FROM mls_key_packages WHERE device_id = $1`,
+    [deviceId, STALE_CLAIM]);
+  return { available: r.available, stale: r.stale };
 }
 
 export async function mlsRoutes(app) {
@@ -71,7 +100,20 @@ export async function mlsRoutes(app) {
     const dev = await ownedDevice(req.user.id, deviceId);
     if (!dev) return reply.code(404).send({ error: "no such device" });
 
+    // The credential inside a KeyPackage is what every group member will see
+    // as this device's name, and its owner wrote it. Only accept packages
+    // that name their uploader, so nobody can publish themselves as someone
+    // else. (KeyPackages are public material; reading one costs no privacy.)
+    // Signed by its own leaf key (proof the uploader holds it) and naming
+    // the uploader: the only packages that may enter the directory.
+    const parsed = await Promise.all(items.map((kp) => verifiedKeyPackage(unb64(kp.keyPackage))));
+    if (parsed.some((p) => !p)) return reply.code(400).send({ error: "invalid key package signature" });
+    if (parsed.some((p) => p.identity !== req.user.handle)) {
+      return reply.code(400).send({ error: "key package credential must name the uploading user" });
+    }
+
     await tx(async (c) => {
+      for (const p of parsed) await registerSignatureKey(c, p.signatureKey, req.user.id);
       for (const kp of items) {
         await c.query(
           `INSERT INTO mls_key_packages(device_id, ciphersuite, ref, key_package)
@@ -80,32 +122,150 @@ export async function mlsRoutes(app) {
         );
       }
     });
+    return keyPackageStatus(dev);
+  });
+
+  /**
+   * How this device's published packages stand, without publishing any.
+   * `stale` lists refs claimed long ago that no Welcome ever followed: the
+   * device can delete their private halves, since nothing will open them.
+   */
+  app.get("/api/mls/devices/:id/key-packages", { preHandler: requireSession }, async (req, reply) => {
+    const dev = await ownedDevice(req.user.id, req.params.id);
+    if (!dev) return reply.code(404).send({ error: "no such device" });
+    return keyPackageStatus(dev);
+  });
+
+  /**
+   * Register a signature key without publishing a claimable package: the
+   * leaf a founder builds a group from is never offered to anyone, but its
+   * messages still need attributing. Same identity rule as uploads.
+   */
+  app.post("/api/mls/signature-keys", { preHandler: requireSession }, async (req, reply) => {
+    const p = await verifiedKeyPackage(unb64(req.body?.keyPackage ?? ""));
+    if (!p) return reply.code(400).send({ error: "invalid key package signature" });
+    if (p.identity !== req.user.handle) {
+      return reply.code(400).send({ error: "key package credential must name the uploading user" });
+    }
+    await tx((c) => registerSignatureKey(c, p.signatureKey, req.user.id));
+    return { ok: true };
+  });
+
+  /**
+   * Whose signature keys are these? Clients attribute messages by the key
+   * that signed them, looked up here, rather than by the (rewritable)
+   * credential. Unknown keys are simply absent from the answer.
+   */
+  app.post("/api/mls/identities", { preHandler: requireSession }, async (req, reply) => {
+    const keys = Array.isArray(req.body?.keys) ? req.body.keys.slice(0, 200).map(String) : [];
+    if (!keys.length) return { identities: {} };
+    // Encode in JS: Postgres's encode(..., 'base64') wraps lines every 76
+    // characters, and a 2.6 KB ML-DSA key would never match the client's.
     const { rows } = await q(
-      "SELECT count(*)::int AS n FROM mls_key_packages WHERE device_id=$1 AND claimed_at IS NULL", [dev]);
-    return { available: rows[0].n };
+      `SELECT k.signature_key, u.handle
+         FROM mls_signature_keys k JOIN users u ON u.id = k.user_id
+        WHERE k.signature_key = ANY($1::bytea[])`, [keys.map(unb64)]);
+    return { identities: Object.fromEntries(rows.map((r) => [b64(r.signature_key), r.handle])) };
+  });
+
+  /**
+   * This device found itself removed from the group's encryption (it applied
+   * a commit that took its leaf). Only its own device can say so. Owner and
+   * admin clients re-add such devices while the roster still lists them.
+   */
+  app.post("/api/mls/groups/:groupId/evicted", { preHandler: requireSession }, async (req, reply) => {
+    const g = await groupMembership(req.user.id, req.params.groupId);
+    if (!g) return reply.code(404).send({ error: "no such group" });
+    const dev = await ownedDevice(req.user.id, req.body?.deviceId);
+    if (!dev) return reply.code(400).send({ error: "unknown device" });
+    // The server can't verify the claim (commits are opaque), and each honoured
+    // report makes owner clients add a leaf. A false one from a modified
+    // client costs only a dead duplicate leaf of the reporter's own device;
+    // honouring at most one per device per group per hour bounds that. (An
+    // honest device is rarely evicted twice in an hour.)
+    await q(
+      `INSERT INTO mls_group_devices(group_id, device_id, evicted_at, eviction_reported_at)
+       VALUES ($1,$2,now(),now())
+       ON CONFLICT (group_id, device_id) DO UPDATE SET evicted_at = now(), eviction_reported_at = now()
+         WHERE mls_group_devices.eviction_reported_at IS NULL
+            OR mls_group_devices.eviction_reported_at < now() - interval '1 hour'`, [g.group_id, dev]);
+    return { ok: true };
+  });
+
+  /** Members of this channel with a device that reported itself evicted. */
+  app.get("/api/mls/groups/:groupId/evicted", { preHandler: requireSession }, async (req, reply) => {
+    const g = await groupMembership(req.user.id, req.params.groupId);
+    if (!g) return reply.code(404).send({ error: "no such group" });
+    const { rows } = await q(
+      `SELECT DISTINCT u.handle FROM mls_group_devices gd
+         JOIN devices d ON d.id = gd.device_id JOIN users u ON u.id = d.user_id
+         JOIN channel_members m ON m.user_id = u.id AND m.channel_id = $2
+        WHERE gd.group_id = $1 AND gd.evicted_at IS NOT NULL`, [g.group_id, g.channel_id]);
+    return { handles: rows.map((r) => r.handle) };
   });
 
   // Claim one unclaimed KeyPackage per device belonging to `handle`.
   // SKIP LOCKED + the claimed_at write is what stops two concurrent adds
   // being handed the same package.
-  app.get("/api/mls/key-packages/:handle", { preHandler: requireSession }, async (req, reply) => {
+  //
+  // Claiming is destructive — each call burns one of the target's packages —
+  // so two limits apply. A per-IP rate limit, tighter than the global one,
+  // bounds raw volume. And a claimer may hold only a few unused claims
+  // against any one user at a time: that is what stops a drain, however many
+  // sessions or addresses it comes from, since an unused claim is exactly
+  // what a drain leaves behind and a real invite does not.
+  app.get("/api/mls/key-packages/:handle", {
+    preHandler: requireSession,
+    config: {
+      rateLimit: {
+        max: Number(process.env.KP_CLAIM_LIMIT) || 20,
+        timeWindow: "1 minute",
+      },
+    },
+  }, async (req, reply) => {
     const suite = req.query?.ciphersuite;
     if (!suite) return reply.code(400).send({ error: "ciphersuite query param required" });
 
-    const { rows: devs } = await q(
+    const { rows: allDevs } = await q(
       `SELECT d.id FROM devices d JOIN users u ON u.id=d.user_id WHERE u.handle=$1`,
       [req.params.handle]);
-    if (!devs.length) return reply.code(404).send({ error: "no devices for handle" });
+    if (!allDevs.length) return reply.code(404).send({ error: "no devices for handle" });
+
+    // Claiming for a specific group skips devices already in it, so an invite
+    // adds only the devices that are missing — a user's new phone, say —
+    // instead of giving existing ones a second leaf.
+    let devs = allDevs;
+    if (req.query?.group) {
+      const g = await groupMembership(req.user.id, req.query.group);
+      if (!g) return reply.code(404).send({ error: "no such group" });
+      const { rows: inGroup } = await q(
+        // Evicted devices hold no leaf any more: they're claimable again.
+        "SELECT device_id FROM mls_group_devices WHERE group_id=$1 AND evicted_at IS NULL", [g.group_id]);
+      const skip = new Set(inGroup.map((r) => r.device_id));
+      devs = allDevs.filter((d) => !skip.has(d.id));
+      if (!devs.length) {
+        return reply.code(409).send({ error: `every device of ${req.params.handle} is already in this group` });
+      }
+    }
+
+    const { rows: [held] } = await q(
+      `SELECT count(*)::int AS n FROM mls_key_packages
+        WHERE claimed_by = $1 AND device_id = ANY($2::uuid[])
+          AND welcomed_at IS NULL AND claimed_at > now() - $3::interval`,
+      [req.user.id, devs.map((d) => d.id), CLAIM_WINDOW]);
+    if (held.n >= MAX_OUTSTANDING_CLAIMS * devs.length) {
+      return reply.code(429).send({ error: "too many unused key-package claims for that user; try again later" });
+    }
 
     const claimed = [];
     for (const d of devs) {
       const got = await tx(async (c) => {
         const { rows } = await c.query(
-          `UPDATE mls_key_packages SET claimed_at=now()
+          `UPDATE mls_key_packages SET claimed_at=now(), claimed_by=$3
             WHERE id = (SELECT id FROM mls_key_packages
                          WHERE device_id=$1 AND ciphersuite=$2 AND claimed_at IS NULL
                          ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1)
-          RETURNING ref, key_package`, [d.id, suite]);
+          RETURNING ref, key_package`, [d.id, suite, req.user.id]);
         return rows[0] ?? null;
       });
       if (got) {
@@ -119,7 +279,7 @@ export async function mlsRoutes(app) {
   // ---------------------------------------------------------------- groups
 
   app.post("/api/mls/groups", { preHandler: requireSession }, async (req, reply) => {
-    const { channelId, groupId, ciphersuite } = req.body || {};
+    const { channelId, groupId, ciphersuite, deviceId } = req.body || {};
     if (!channelId || !groupId || !ciphersuite) {
       return reply.code(400).send({ error: "channelId, groupId and ciphersuite required" });
     }
@@ -127,12 +287,20 @@ export async function mlsRoutes(app) {
       "SELECT 1 FROM channel_members WHERE channel_id=$1 AND user_id=$2", [channelId, req.user.id]);
     if (!member.rowCount) return reply.code(403).send({ error: "not a member of that channel" });
 
+    // The founding device holds the group's first leaf.
+    const founder = deviceId ? await ownedDevice(req.user.id, deviceId) : null;
     try {
-      const { rows } = await q(
-        `INSERT INTO mls_groups(channel_id, group_id, ciphersuite, created_by, epoch)
-         VALUES ($1,$2,$3,$4,0) RETURNING id, epoch`,
-        [channelId, unb64(groupId), ciphersuite, req.user.id]);
-      return { id: rows[0].id, epoch: Number(rows[0].epoch) };
+      return await tx(async (c) => {
+        const { rows } = await c.query(
+          `INSERT INTO mls_groups(channel_id, group_id, ciphersuite, created_by, epoch)
+           VALUES ($1,$2,$3,$4,0) RETURNING id, epoch`,
+          [channelId, unb64(groupId), ciphersuite, req.user.id]);
+        if (founder) {
+          await c.query("INSERT INTO mls_group_devices(group_id, device_id) VALUES ($1,$2)",
+            [unb64(groupId), founder]);
+        }
+        return { id: rows[0].id, epoch: Number(rows[0].epoch) };
+      });
     } catch (e) {
       if (e.code === "23505") return reply.code(409).send({ error: "group already exists for that channel" });
       throw e;
@@ -156,7 +324,7 @@ export async function mlsRoutes(app) {
    * a second, divergent history. The loser re-fetches and rebuilds.
    */
   app.post("/api/mls/groups/:groupId/messages", { preHandler: requireSession }, async (req, reply) => {
-    const { kind, payload, epoch, senderDeviceId, welcomes, retentionDays } = req.body || {};
+    const { kind, payload, epoch, senderDeviceId, welcomes, removes, retentionDays } = req.body || {};
     if (!["application", "commit", "proposal"].includes(kind)) {
       return reply.code(400).send({ error: "kind must be application|commit|proposal" });
     }
@@ -174,6 +342,21 @@ export async function mlsRoutes(app) {
       return reply.code(400).send({ error: "welcomes only ride along with a commit" });
     }
 
+    // Removal. The commit itself is opaque, so the server cannot see who it
+    // removes from the MLS group; `removes` names them so their access to the
+    // channel's ciphertext ends with the same transaction. Cryptographically
+    // they are already out — the next epoch's keys never reach them.
+    //
+    // Removing a current member takes an owner or admin (checked per target
+    // below), and never an owner or oneself. Pruning the leftover leaf of
+    // someone who is no longer a member is hygiene any member may do: it
+    // revokes nothing, and a re-invite needs it.
+    const drops = Array.isArray(removes) ? [...new Set(removes.map(String))] : [];
+    if (drops.length) {
+      if (kind !== "commit") return reply.code(400).send({ error: "removes only ride along with a commit" });
+      if (drops.includes(req.user.handle)) return reply.code(400).send({ error: "cannot remove yourself" });
+    }
+
     // Retention applies to application traffic only. A commit or proposal
     // that expired would vanish from the replay while compaction still
     // assumes it is there, and a member replaying epochs could never catch up.
@@ -182,19 +365,23 @@ export async function mlsRoutes(app) {
       ? new Date(Date.now() + ttl * 864e5) : null;
 
     try {
-      return await tx(async (c) => {
+      const revoked = [];
+      const out = await tx(async (c) => {
         let writeEpoch = Number(g.epoch);
 
         // A Welcome grants channel membership (below), so it must be backed
-        // by a KeyPackage that was actually claimed from the target device.
-        // Without this, any member could pull an arbitrary user into the
-        // channel just by naming one of their device ids.
+        // by a KeyPackage that THIS user claimed from the target device and
+        // has not already spent on another Welcome. Without that, any member
+        // could pull an arbitrary user into channels by naming their device,
+        // or replay one old claim into channel after channel. Marking it
+        // spent here rolls back with the rest if the commit is refused.
         for (const w of adds) {
           const ok = typeof w?.ref === "string" && typeof w?.welcome === "string" && w.deviceId
             ? await c.query(
-                `SELECT 1 FROM mls_key_packages
-                  WHERE ref=$1 AND device_id::text=$2 AND claimed_at IS NOT NULL`,
-                [unb64(w.ref), String(w.deviceId)])
+                `UPDATE mls_key_packages SET welcomed_at = now()
+                  WHERE ref=$1 AND device_id::text=$2 AND claimed_by=$3
+                    AND claimed_at IS NOT NULL AND welcomed_at IS NULL`,
+                [unb64(w.ref), String(w.deviceId), req.user.id])
             : { rowCount: 0 };
           if (!ok.rowCount) {
             throw Object.assign(new Error("welcome does not match a claimed key package for that device"),
@@ -224,6 +411,27 @@ export async function mlsRoutes(app) {
           [g.group_id, writeEpoch, kind, dev, body, expires]);
         const seq = Number(rows[0].seq);
 
+        // Revocations first: a re-invite commit both prunes someone's old
+        // leaf and welcomes them back, and the grant below must be the last
+        // word on their membership.
+        for (const handle of drops) {
+          const { rows: [target] } = await c.query(
+            `SELECT u.id, m.role FROM users u
+               LEFT JOIN channel_members m ON m.user_id = u.id AND m.channel_id = $1
+              WHERE u.handle = $2`, [g.channel_id, handle]);
+          // No such user, or not a member any more: a leaf with nothing to
+          // revoke. Refusing would block every other removal in the batch.
+          if (!target?.role) continue;
+          if (target.role === "owner") {
+            throw Object.assign(new Error("an owner cannot be removed"), { statusCode: 400 });
+          }
+          if (!["owner", "admin"].includes(g.role)) {
+            throw Object.assign(new Error("only a channel owner or admin can remove members"), { statusCode: 403 });
+          }
+          await revokeAccess(c, g.channel_id, target.id);
+          revoked.push(target.id);
+        }
+
         // Welcomes ride along with the commit that added the members.
         //
         // Being welcomed into the group IS the grant of log access — otherwise
@@ -249,9 +457,17 @@ export async function mlsRoutes(app) {
             `INSERT INTO mls_device_cursors(group_id, device_id, last_seq)
              VALUES ($1,$2,$3) ON CONFLICT (group_id, device_id) DO NOTHING`,
             [g.group_id, w.deviceId, seq]);
+          await c.query(
+            `INSERT INTO mls_group_devices(group_id, device_id) VALUES ($1,$2)
+             ON CONFLICT (group_id, device_id) DO UPDATE SET evicted_at = NULL`, [g.group_id, w.deviceId]);
         }
         return { seq, epoch: writeEpoch };
       });
+      // Only after the commit is durable. Best effort: clients also poll.
+      if (adds.length || revoked.length) invalidateMembers(g.group_id);
+      hintGroup(g.group_id, out.seq, revoked).catch(() => {});
+      hintWelcome(adds.map((w) => String(w.deviceId))).catch(() => {});
+      return out;
     } catch (e) {
       if (e.statusCode) return reply.code(e.statusCode).send({ error: e.message });
       // The partial unique index is the backstop if the guard is ever bypassed.
