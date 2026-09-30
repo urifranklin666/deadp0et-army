@@ -34,6 +34,7 @@ export const api = {
   registerDevice: (name, identity) => call("POST", "/api/mls/devices", { name, identity }),
   publishKeyPackages: (deviceId, ciphersuite, keyPackages) =>
     call("POST", "/api/mls/key-packages", { deviceId, ciphersuite, keyPackages }),
+  keyPackageStatus: (deviceId) => call("GET", `/api/mls/devices/${deviceId}/key-packages`),
   claimKeyPackages: (handle, ciphersuite) =>
     call("GET", `/api/mls/key-packages/${encodeURIComponent(handle)}?ciphersuite=${encodeURIComponent(ciphersuite)}`),
 

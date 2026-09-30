@@ -32,7 +32,7 @@ async function seedUser(handle) {
 
 const api = async (user, method, path, body) => {
   const r = await fetch(BASE + path, {
-    method, headers: { "content-type": "application/json", cookie: user.cookie },
+    method, headers: { "content-type": "application/json", cookie: user.cookie, ...(user.headers || {}) },
     body: body ? JSON.stringify(body) : undefined,
   });
   return { status: r.status, json: await r.json().catch(() => ({})) };
@@ -118,18 +118,55 @@ console.log("· retention sweep removes only what reads were already hiding; com
 
 // -------------------------------------------------- claim rate limiting
 
+// Per-IP limit. A dedicated forwarded address keeps this from eating the
+// budget of whatever suite runs next from 127.0.0.1.
 const LIMIT = Number(process.env.KP_CLAIM_LIMIT) || 20;
 const claimant = await seedUser("hk_claimant");
+const from = (ip) => ({ ...claimant, headers: { "x-forwarded-for": ip } });
 let limited = 0;
 for (let i = 0; i < LIMIT + 3; i++) {
-  const r = await api(claimant, "GET", `/api/mls/key-packages/hk_bob?ciphersuite=test`);
+  const r = await api(from("10.99.0.1"), "GET", `/api/mls/key-packages/hk_alice?ciphersuite=test`);
   if (r.status === 429) limited++;
 }
-assert.equal(limited, 3, `claims past ${LIMIT}/min per session should be refused`);
-// Keyed per session: someone else on the same address is unaffected.
-const other = await api(alice, "GET", `/api/mls/key-packages/hk_bob?ciphersuite=test`);
-assert.notEqual(other.status, 429, "one session's claims must not throttle another's");
-console.log("· key-package claims throttled per session (", limited, "refused )");
+assert.equal(limited, 3, `claims past ${LIMIT}/min per address should be refused`);
+const elsewhere = await api(from("10.99.0.2"), "GET", `/api/mls/key-packages/hk_alice?ciphersuite=test`);
+assert.notEqual(elsewhere.status, 429, "another address has its own budget");
+console.log("· key-package claims rate-limited per address (", limited, "refused )");
+
+// Unused-claim cap: however many sessions or addresses, one user may hold
+// only a few never-welcomed claims against another user's device.
+const kps = Array.from({ length: 6 }, () => ({
+  ref: crypto.randomBytes(32).toString("base64"),
+  keyPackage: crypto.randomBytes(64).toString("base64"),
+}));
+const pub = await api(bob, "POST", "/api/mls/key-packages", { deviceId: bDev, ciphersuite: "hk", keyPackages: kps });
+assert.equal(pub.json.available, 6);
+const drainer = await seedUser("hk_drainer");
+const statuses = [];
+for (let i = 0; i < 4; i++) {
+  statuses.push((await api({ ...drainer, headers: { "x-forwarded-for": `10.98.0.${i}` } },
+    "GET", "/api/mls/key-packages/hk_bob?ciphersuite=hk")).status);
+}
+assert.deepEqual(statuses, [200, 200, 200, 429], "a 4th unused claim against one device must be refused");
+// A fresh session for the same user is the same claimer.
+const again = await q(
+  "INSERT INTO sessions(user_id, token_hash, expires_at) VALUES ($1,$2, now() + interval '1 hour')",
+  [drainer.id, sha256("second-session")]);
+const second = await api({ cookie: "dp_session=second-session", headers: { "x-forwarded-for": "10.98.1.1" } },
+  "GET", "/api/mls/key-packages/hk_bob?ciphersuite=hk");
+assert.equal(second.status, 429, "a new session must not reset the unused-claim cap");
+assert.equal((await api(bob, "GET", `/api/mls/devices/${bDev}/key-packages`)).json.available, 3,
+  "the drain stops with packages left for real invites");
+console.log("· unused claims capped per claimer; bob keeps packages for real invites");
+
+// Claims no Welcome ever followed are reported stale, so the device can
+// discard their private halves.
+await q("UPDATE mls_key_packages SET claimed_at = now() - interval '2 days' WHERE device_id=$1 AND claimed_by=$2",
+  [bDev, drainer.id]);
+const status = (await api(bob, "GET", `/api/mls/devices/${bDev}/key-packages`)).json;
+assert.equal(status.stale.length, 3, "day-old unwelcomed claims should be reported stale");
+assert.ok(status.stale.every((r) => kps.some((k) => k.ref === r)));
+console.log("· stale claims reported to the owning device");
 
 // ------------------------------------------------ presence revocation
 
@@ -165,7 +202,7 @@ console.log("· presence socket closed after its session was revoked");
 
 wa.close();
 await q("DELETE FROM users WHERE handle = ANY($1)",
-  [["hk_alice", "hk_bob", "hk_expired", "hk_claimant", "hk_outsider"]]);
+  [["hk_alice", "hk_bob", "hk_expired", "hk_claimant", "hk_outsider", "hk_drainer"]]);
 await pool.end();
 await closeChallenges();
 console.log("\nALL HOUSEKEEPING ASSERTIONS PASSED");

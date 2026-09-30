@@ -67,13 +67,17 @@ pinning the log, and a `compaction_watermark` lets the read path answer
 
 **A Welcome is a grant, so it is checked.** Being welcomed materialises
 channel membership, so the server only accepts a Welcome naming a KeyPackage
-that was actually claimed from the target device. It also seeds that device's
+the committer itself claimed from the target device — and each claim backs
+one Welcome, never a replay. It also seeds that device's
 delivery cursor at the add commit, so compaction cannot prune past a joiner
 who has not come online yet.
 
 **KeyPackages are a pool.** Each is single-use, so every device keeps a few
 published (topped up when it runs low) and opens a Welcome with the private
 half matching the ref it was addressed to. One package would mean one group.
+A founder's leaf comes from a fresh package that is never published, and a
+claimer may hold only a few unused claims against any one user, so nobody can
+drain someone else's pool.
 
 **Group state is touched by one operation at a time.** Encrypting and applying
 both read the ratchet, await, and write it back; a sync landing mid-send could

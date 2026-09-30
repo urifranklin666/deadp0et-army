@@ -35,11 +35,11 @@ export async function login(handle) {
 /**
  * Ensure this browser has a registered device and published KeyPackages.
  *
- * The primary KeyPackage doubles as the device's stable identity and is what
- * a group founder's leaf is built from, so it is generated once and
- * persisted. Invitable KeyPackages come from a separate pool (see
- * topUpKeyPackages): their private halves are also kept only here, because
- * regenerating them would orphan any Welcome already addressed to one.
+ * The primary KeyPackage is the device's stable identity (its public half
+ * fingerprints the device row), so it is generated once and persisted.
+ * Invitable KeyPackages come from a separate pool (see topUpKeyPackages):
+ * their private halves are also kept only here, because regenerating them
+ * would orphan any Welcome already addressed to one.
  */
 export async function ensureDevice(handle) {
   let saved = await store.get(K.keyPackage(handle));
@@ -61,33 +61,66 @@ export async function ensureDevice(handle) {
 }
 
 /**
- * Keep enough unclaimed KeyPackages on the server for this device to be
- * invited. Publishing is idempotent server-side (duplicate refs are ignored),
- * so re-sending the primary package doubles as a cheap "how many are left".
+ * Serialise every read-modify-write of the KeyPackage pool. It is shared by
+ * all of a handle's group sessions, and a lost write here is not harmless: it
+ * drops private halves whose public halves are already on the server, so a
+ * later Welcome addressed to one could never be opened.
  */
-export async function topUpKeyPackages(handle, deviceId) {
-  const primary = await store.get(K.keyPackage(handle));
-  if (!primary) return 0;
-  const { available } = await api.publishKeyPackages(deviceId, SUITE, [
-    { ref: await kpRef(primary), keyPackage: primary.public },
-  ]);
-  if (available >= KP_LOW_WATER) return available;
+const poolLocks = new Map();
+function withPool(handle, fn) {
+  const prev = poolLocks.get(handle) || Promise.resolve();
+  const run = prev.then(fn, fn);
+  poolLocks.set(handle, run.catch(() => {}));
+  return run;
+}
 
-  const pool = (await store.get(K.keyPackagePool(handle))) || {};
-  const fresh = [];
-  for (let i = available; i < KP_TARGET; i++) {
-    const c = await MlsClient.create(handle);
-    await c.newKeyPackage();
-    const kp = c.exportKeyPackage();
-    const ref = await kpRef(kp);
-    pool[ref] = kp;
-    fresh.push({ ref, keyPackage: kp.public });
-  }
-  // Private halves are stored BEFORE the public halves are published, so a
-  // Welcome can never arrive for a package this device has already lost.
-  await store.set(K.keyPackagePool(handle), pool);
-  const res = await api.publishKeyPackages(deviceId, SUITE, fresh);
-  return res.available;
+/**
+ * Keep enough unclaimed KeyPackages on the server for this device to be
+ * invited, and forget packages that were claimed but never welcomed.
+ *
+ * The primary package is never (re)published here: it is the device's
+ * identity, and re-sending it would resurrect it as claimable once the
+ * server's retention sweep had deleted its claimed row.
+ */
+export function topUpKeyPackages(handle, deviceId) {
+  return withPool(handle, async () => {
+    const { available, stale } = await api.keyPackageStatus(deviceId);
+    const pool = (await store.get(K.keyPackagePool(handle))) || {};
+
+    let changed = false;
+    for (const ref of stale || []) {
+      if (pool[ref]) { delete pool[ref]; changed = true; }
+    }
+    if (available >= KP_LOW_WATER) {
+      if (changed) await store.set(K.keyPackagePool(handle), pool);
+      return available;
+    }
+
+    const fresh = [];
+    for (let i = available; i < KP_TARGET; i++) {
+      const c = await MlsClient.create(handle);
+      await c.newKeyPackage();
+      const kp = c.exportKeyPackage();
+      const ref = await kpRef(kp);
+      pool[ref] = kp;
+      fresh.push({ ref, keyPackage: kp.public });
+    }
+    // Private halves are stored BEFORE the public halves are published, so a
+    // Welcome can never arrive for a package this device has already lost.
+    await store.set(K.keyPackagePool(handle), pool);
+    const res = await api.publishKeyPackages(deviceId, SUITE, fresh);
+    return res.available;
+  });
+}
+
+/** Take one package's private half out of the pool, once it has been used. */
+function dropFromPool(handle, ref) {
+  return withPool(handle, async () => {
+    const pool = (await store.get(K.keyPackagePool(handle))) || {};
+    if (!pool[ref]) return;
+    delete pool[ref];
+    await store.set(K.keyPackagePool(handle), pool);
+  });
 }
 
 /** The ref the server files a KeyPackage under, and addresses Welcomes by. */
@@ -271,10 +304,7 @@ export class GroupSession {
     // The group state now holds everything the join needed; the package's
     // init key has done its job, and keeping it would only weaken forward
     // secrecy. Then replace what the inviter claimed.
-    if (pool[mine.ref]) {
-      delete pool[mine.ref];
-      await store.set(K.keyPackagePool(this.handle), pool);
-    }
+    await dropFromPool(this.handle, mine.ref);
     topUpKeyPackages(this.handle, this.deviceId).catch(() => {});
     // The canvas so far is unreadable to us — we lacked the keys. An existing
     // member sends a snapshot after inviting; until it lands the board is blank.
@@ -353,6 +383,11 @@ export class GroupSession {
       this.cursor = m.seq;
     }
     if (messages.length) {
+      // Our own sends are recorded the moment they post, but may carry a
+      // higher seq than peers' messages this sync just fetched. Keep the
+      // transcript in log order (Array#sort is stable, so equal seqs keep
+      // their arrival order).
+      this.history.sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
       await this.#persist();
       // Tell the server how far we've applied. This is the sole input to
       // compaction — without it the log can never be pruned, because the
@@ -382,6 +417,24 @@ export class GroupSession {
     const seq = await this.#sendEnvelope({ t: T.Y_SNAPSHOT, u: b64(Y.encodeStateAsUpdate(this.doc)) });
     this.lastSnapshotSeq = seq;
     return seq;
+  }
+
+  /**
+   * Did the commit this device built at `epoch` make it into the log? At most
+   * one commit exists per epoch, so whichever one is there answers it.
+   * False if the whole log has no commit at that epoch; null if it could not
+   * be read far enough to say.
+   */
+  async #ownCommitLanded(epoch) {
+    let since = this.cursor;
+    for (let page = 0; page < 20; page++) {
+      const { messages } = await api.messages(this.groupId, since);
+      const commit = messages.find((m) => m.kind === "commit" && m.epoch === epoch);
+      if (commit) return commit.senderDeviceId === this.deviceId;
+      if (!messages.length) return false;     // log fully read, no commit at that epoch
+      since = messages[messages.length - 1].seq;
+    }
+    return null;
   }
 
   /** Sync until the server has nothing newer for us. */
@@ -430,14 +483,17 @@ export class GroupSession {
       });
     } catch (e) {
       // addMembers() already moved us to the next epoch locally. If the
-      // server refused the commit, nobody else will ever follow us there —
-      // roll back, or this device is forked off the group for good. Only an
-      // actual error response proves a refusal (the append is one
-      // transaction); a lost response may have landed, so keep the new state.
-      if (!e.status) throw e;
-      const kp = await store.get(K.keyPackage(this.handle));
-      this.client = await MlsClient.restore(this.handle, { keyPackage: kp, state: before });
-      throw e;
+      // server did not take the commit, nobody else will ever follow us
+      // there — roll back, or this device is forked off the group for good.
+      // An error response proves a refusal (the append is one transaction).
+      // With no response at all, ask the log whether it landed.
+      const landed = e.status ? false : await this.#ownCommitLanded(add.builtAtEpoch).catch(() => null);
+      if (landed === null) throw e;           // still can't tell; keep state, surface the error
+      if (!landed) {
+        const kp = await store.get(K.keyPackage(this.handle));
+        this.client = await MlsClient.restore(this.handle, { keyPackage: kp, state: before });
+        throw e;
+      }
     }
     // Everything before the commit is undecryptable to the new member, so the
     // canvas would be blank for them. Re-publish the board at the new epoch.

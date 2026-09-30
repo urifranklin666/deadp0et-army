@@ -30,7 +30,7 @@ globalThis.fetch = (path, init = {}) =>
   realFetch(BASE + path, { ...init, headers: { ...(init.headers || {}), cookie } });
 const as = (user) => { cookie = user.cookie; };
 
-const { GroupSession, ensureDevice } = await import("../src/lib/session.js");
+const { GroupSession, ensureDevice, topUpKeyPackages } = await import("../src/lib/session.js");
 const { api } = await import("../src/lib/api.js");
 const { store, K } = await import("../src/lib/db.js");
 const { unb64 } = await import("@deadp0et/crypto/mls");
@@ -101,6 +101,9 @@ await A.sync();
 assert.deepEqual(texts(A), ["from bob, while alice was not looking"],
   "alice's own send must not jump her cursor past bob's message");
 assert.equal(errors(A).length, 0, "alice should not try to decrypt her own message");
+assert.deepEqual(A.history.map((h) => h.text),
+  ["from bob, while alice was not looking", "from alice"],
+  "the transcript must stay in log order even though alice's send was recorded first");
 as(bob); await B.sync();
 assert.deepEqual(texts(B), ["from alice"]);
 assert.equal(errors(B).length, 0);
@@ -131,10 +134,27 @@ const left = await q(
 assert.ok(left.rows[0].n >= 3, "the pool should be topped up after joins");
 console.log("· pool refilled to", left.rows[0].n);
 
+// ------------------------------------- the pool survives concurrent top-ups
+
+// Several refills racing (boot, and joins in two groups at once) must not
+// lose any private half whose public half was published.
+const dave = await seedUser("sess_dave");
+as(dave);
+const dDev = (await ensureDevice(dave.handle)).deviceId;
+await q("UPDATE mls_key_packages SET claimed_at = now() WHERE device_id=$1", [dDev]);   // drain it
+await Promise.all([1, 2, 3].map(() => topUpKeyPackages(dave.handle, dDev)));
+const pooledRefs = Object.keys((await store.get(K.keyPackagePool(dave.handle))) || {});
+const { rows: onServer } = await q(
+  "SELECT encode(ref,'base64') AS ref FROM mls_key_packages WHERE device_id=$1 AND claimed_at IS NULL", [dDev]);
+assert.ok(onServer.length >= 3, "the refill should publish packages");
+assert.ok(onServer.every((r) => pooledRefs.includes(r.ref)),
+  "every published package must still have its private half locally");
+console.log("· concurrent refills keep every published package openable");
+
 // ----------------------------------------- refused commit rolls back
 
 const carol = await seedUser("sess_carol");
-as(carol); await ensureDevice(carol.handle);
+as(carol); const cDev = (await ensureDevice(carol.handle)).deviceId;
 
 as(alice);
 const epochBefore = A.epoch;
@@ -154,7 +174,36 @@ assert.ok(texts(B).includes("still in step after a refused commit"),
 assert.equal(errors(B).length, 0);
 console.log("· refused commit rolled back; alice still in step with the group");
 
+// ------------------------------- lost responses: ask the log what happened
+
+// Never reached the server: no status, nothing in the log → roll back.
+as(alice);
+const beforeLost = A.epoch;
+api.postMessage = async (gid, body) => {
+  if (body.kind === "commit") throw new TypeError("fetch failed");   // offline before sending
+  return realPost(gid, body);
+};
+await assert.rejects(A.invite(carol.handle), /fetch failed/);
+api.postMessage = realPost;
+assert.equal(A.epoch, beforeLost, "a commit that never landed must be rolled back");
+
+// Landed, but the response was lost: keep the new epoch, and carol joins it.
+api.postMessage = async (gid, body) => {
+  const res = await realPost(gid, body);
+  if (body.kind === "commit") throw new TypeError("connection reset");
+  return res;
+};
+await A.invite(carol.handle);
+api.postMessage = realPost;
+assert.equal(A.epoch, beforeLost + 1, "a commit that landed must be kept");
+as(carol);
+const Cs = new GroupSession(carol.handle, cDev, A.channel);
+Cs.groupId = A.groupId;
+assert.equal(await Cs.tryJoin(), true, "carol should join from the commit that did land");
+assert.equal(Cs.epoch, A.epoch, "carol and alice agree after a lost response");
+console.log("· lost responses resolved from the log: rolled back if absent, kept if landed");
+
 await settle();                                     // let fire-and-forget cursor reports land
-await q("DELETE FROM users WHERE handle = ANY($1)", [["sess_alice", "sess_bob", "sess_carol"]]);
+await q("DELETE FROM users WHERE handle = ANY($1)", [["sess_alice", "sess_bob", "sess_carol", "sess_dave"]]);
 await pool.end();
 console.log("\nALL SESSION ASSERTIONS PASSED");

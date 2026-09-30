@@ -60,7 +60,16 @@ export async function liveRoutes(app) {
     // (One close code for both failures: telling an outsider "that group
     // exists but you're not in it" would be a membership oracle.)
     const token = req.cookies?.dp_session;
-    const userId = await authorise(token, groupId).catch(() => null);
+    let userId;
+    try {
+      userId = await authorise(token, groupId);
+    } catch (err) {
+      // Not a verdict on the caller: 1011 tells the client to retry, where
+      // 4403 would tell it to give up for good.
+      req.log.warn({ err }, "presence: auth check failed");
+      socket.close(1011, "try again");
+      return;
+    }
     if (!userId) { socket.close(4403, "forbidden"); return; }
 
     const peers = join(groupId, socket);

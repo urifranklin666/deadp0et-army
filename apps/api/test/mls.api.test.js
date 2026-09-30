@@ -205,6 +205,16 @@ console.log("· bob committed add(carol) at epoch", addCarol.builtAtEpoch, "-> s
 const tail = await must(alice, "GET", `/api/mls/groups/${GID}/messages?since=${sent.seq}`);
 for (const m of tail.messages) await A.apply(unb64(m.payload));
 
+// A claim backs exactly one Welcome. Replaying carol's (ref, device) in a
+// later commit — here by bob, who made the claim — must be refused.
+const replay = await api(bob, "POST", `/api/mls/groups/${GID}/messages`, {
+  kind: "commit", epoch: addCarol.builtAtEpoch + 1, senderDeviceId: bDev,
+  payload: b64(addCarol.commit),
+  welcomes: [{ ref: cClaim.keyPackages[0].ref, deviceId: cDev, welcome: b64(addCarol.welcome) }],
+});
+assert.equal(replay.status, 400, "a spent claim must not back a second welcome");
+console.log("· a spent key-package claim cannot be replayed into another welcome");
+
 const cInbox = await must(carol, "GET", `/api/mls/devices/${cDev}/welcomes`);
 await C.joinFromWelcome(unb64(cInbox.welcomes[0].welcome));
 assert.equal(B.epoch, C.epoch, "bob and carol must agree on the epoch");

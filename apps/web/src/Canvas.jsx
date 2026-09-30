@@ -69,6 +69,9 @@ export default function Canvas({ session, onError, openModal }) {
     }
   }, [session]);
 
+  // `joined` is a dep because presence needs MLS state for its key: a session
+  // that joins while this canvas is open (the Welcome arrived late) must
+  // start presence then, not on the next reselect.
   useEffect(() => {
     paint();
     const onChange = () => { setCount(session.strokes.length); paint(); force((n) => n + 1); };
@@ -87,7 +90,7 @@ export default function Canvas({ session, onError, openModal }) {
       p.close();
       presence.current = null;
     };
-  }, [session, paint]);
+  }, [session, paint, joined]);
 
   /* ------------------------------------------------------------- pointers */
 

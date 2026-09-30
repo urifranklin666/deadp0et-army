@@ -276,23 +276,25 @@ function App() {
 
         // A session already open on a group we've just been welcomed into
         // (the user was looking at it, waiting) joins straight away.
-        let joinedAny = false;
+        const joined = new Set();
         for (const s of sessions.current.values()) {
           if (s.client || !s.groupId || !welcomes.some((w) => w.groupId === s.groupId)) continue;
-          if (await s.tryJoin().catch(() => false)) joinedAny = true;
+          if (await s.tryJoin().catch(() => false)) joined.add(s.groupId);
         }
         if (dead) return;
-        if (joinedAny) { setErr(null); bump(); }
+        if (joined.size) { setErr(null); bump(); }
 
-        // Announce each Welcome once, not on every poll until it's accepted.
+        // Announce each Welcome once, not on every poll until it's accepted —
+        // and not at all for the ones just joined above.
         const fresh = welcomes.filter((w) => !notifiedWelcomes.current.has(w.id));
         if (!fresh.length) return;
         fresh.forEach((w) => notifiedWelcomes.current.add(w.id));
         const { channels: list } = await api.channels();
         if (dead) return;
         setChannels(list);
-        if (!joinedAny) {
-          setNotice(`Invited to ${fresh.length} group${fresh.length > 1 ? "s" : ""} — open it to join.`);
+        const pending = fresh.filter((w) => !joined.has(w.groupId)).length;
+        if (pending) {
+          setNotice(`Invited to ${pending} group${pending > 1 ? "s" : ""} — open it to join.`);
         }
       } catch { /* transient */ }
     }, SYNC_MS * 2);
