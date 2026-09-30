@@ -17,9 +17,18 @@ import { q } from "../db.js";
 const rooms = new Map();          // groupId(b64) -> Set<socket>
 const MAX_FRAME = 4096;           // a cursor packet is ~60 bytes
 const MAX_PER_SEC = 40;           // generous for 20Hz, cheap to enforce
+const MAX_SOCKETS_PER_USER = 4;   // per group: a few tabs, not a fan-out amplifier
+const RP_ORIGIN = process.env.RP_ORIGIN;
 const RECHECK_MS = Number(process.env.PRESENCE_RECHECK_MS) || 60_000;  // max time a revoked session keeps listening
 
 const sha256 = (s) => crypto.createHash("sha256").update(s).digest();
+
+/** Sockets `userId` already holds in this group. */
+function held(groupId, userId) {
+  let n = 0;
+  for (const s of rooms.get(groupId) || []) if (s.userId === userId) n++;
+  return n;
+}
 
 function join(groupId, socket) {
   let set = rooms.get(groupId);
@@ -56,6 +65,15 @@ export async function liveRoutes(app) {
   app.get("/api/mls/groups/:groupId/live", { websocket: true }, async (socket, req) => {
     const groupId = req.params.groupId;
 
+    // Browsers send the session cookie on any same-site WebSocket upgrade,
+    // and CORS does not apply to WebSockets. Without this check a page on
+    // another origin of the same site could listen in as the user (seeing
+    // only ciphertext, but still traffic timing and sizes) and inject frames.
+    if (RP_ORIGIN && req.headers.origin !== RP_ORIGIN) {
+      socket.close(4403, "forbidden");
+      return;
+    }
+
     // The WS upgrade carries cookies, so the same session check applies.
     // (One close code for both failures: telling an outsider "that group
     // exists but you're not in it" would be a membership oracle.)
@@ -71,6 +89,11 @@ export async function liveRoutes(app) {
       return;
     }
     if (!userId) { socket.close(4403, "forbidden"); return; }
+    if (held(groupId, userId) >= MAX_SOCKETS_PER_USER) {
+      socket.close(4429, "too many connections");
+      return;
+    }
+    socket.userId = userId;
 
     const peers = join(groupId, socket);
     req.log.info({ groupId, peers: peers.size }, "presence: joined");

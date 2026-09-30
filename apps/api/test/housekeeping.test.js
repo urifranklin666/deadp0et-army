@@ -171,8 +171,9 @@ console.log("· stale claims reported to the owning device");
 // ------------------------------------------------ presence revocation
 
 const wsUrl = BASE.replace(/^http/, "ws") + `/api/mls/groups/${encodeURIComponent(gid)}/live`;
-const connect = (user) => new Promise((resolve, reject) => {
-  const ws = new WebSocket(wsUrl, { headers: { cookie: user.cookie } });
+const ORIGIN = process.env.RP_ORIGIN;
+const connect = (user, origin = ORIGIN) => new Promise((resolve, reject) => {
+  const ws = new WebSocket(wsUrl, { headers: { cookie: user.cookie, ...(origin ? { origin } : {}) } });
   ws.got = [];
   ws.on("message", (d) => ws.got.push(d));
   ws.on("close", (code) => { ws.closedWith = code; });
@@ -184,6 +185,23 @@ const outsider = await seedUser("hk_outsider");
 const refused = await connect(outsider);
 await sleep(200);
 assert.equal(refused.closedWith, 4403, "a non-member must be refused");
+
+if (ORIGIN) {
+  const foreign = await connect(alice, "https://evil.example");
+  await sleep(200);
+  assert.equal(foreign.closedWith, 4403, "an upgrade from another origin must be refused");
+  console.log("· presence upgrade from a foreign origin refused");
+}
+
+// A user gets a few sockets per group (tabs), not an amplifier.
+const extra = [];
+for (let i = 0; i < 5; i++) extra.push(await connect(alice));
+await sleep(200);
+assert.deepEqual(extra.map((w) => w.closedWith ?? null), [null, null, null, null, 4429],
+  "a 5th socket from one user in one group should be refused");
+extra.forEach((w) => w.close());
+await sleep(200);
+console.log("· presence sockets capped per user");
 
 const wa = await connect(alice);
 const wb = await connect(bob);

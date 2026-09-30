@@ -46,7 +46,9 @@ export class Presence {
       // or no longer a member). Retrying every two seconds would only hammer
       // it; a fresh Presence is created when the channel is reopened.
       if (ev.code === 4403) { this.close(); return; }
-      this.#retry();
+      // 4429: this user already has the maximum sockets open here (other
+      // tabs). Wait for one of them to close rather than knocking every 2s.
+      this.#retry(ev.code === 4429 ? 30_000 : RECONNECT_MS);
     };
     ws.onerror = () => { try { ws.close(); } catch { /* already closing */ } };
 
@@ -60,10 +62,10 @@ export class Presence {
     }, 1000);
   }
 
-  #retry() {
+  #retry(delay = RECONNECT_MS) {
     if (this.closed) return;
     clearTimeout(this.retryTimer);
-    this.retryTimer = setTimeout(() => this.connect(), RECONNECT_MS);
+    this.retryTimer = setTimeout(() => this.connect(), delay);
   }
 
   /** Throttled cursor publish; coordinates are normalised 0..1. */
