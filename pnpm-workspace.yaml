@@ -11,3 +11,12 @@ allowBuilds:
 onlyBuiltDependencies:
   - esbuild
   - "@signalapp/libsignal-client"
+
+# Patched versions of transitive dependencies with published advisories
+# (fastify -> ajv/fast-json-stringify -> fast-uri; postcss -> nanoid;
+# vite -> esbuild). Remove an entry once its parents pull the fix in.
+overrides:
+  "fast-uri@>=3.0.0 <3.1.8": "^3.1.8"
+  "fast-uri@>=4.0.0 <4.1.5": "^4.1.5"
+  "nanoid@<3.3.18": "^3.3.18"
+  "esbuild@<0.24.3": "^0.25.0"
