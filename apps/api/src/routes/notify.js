@@ -53,6 +53,27 @@ export function invalidateMembers(groupId) {
   publish("members", groupId === undefined ? "*" : Buffer.from(groupId).toString("hex"));
 }
 
+/**
+ * Something that can end a user's access just happened (a sign-out, a
+ * revoked session, leaving or removal from a channel, account deletion):
+ * every node re-checks that user's live sockets now, closing any that no
+ * longer pass, instead of waiting up to RECHECK_MS for the periodic check.
+ * The check itself is the same one, so this can only close sooner.
+ */
+export function recheckSockets(userIds) {
+  for (const id of new Set([].concat(userIds))) publish("recheck", String(id));
+}
+
+subscribe("recheck", (data) => {
+  const id = data.toString();
+  for (const socket of subscribers.get(id) || []) socket.recheck?.();
+  for (const fn of recheckers) fn(id);
+});
+
+// Other socket kinds (the presence relay) register here to be re-checked too.
+const recheckers = new Set();
+export const onRecheck = (fn) => { recheckers.add(fn); };
+
 // With one node and nobody listening, there's no one to tell: skip the query.
 const nobodyListening = () => !subscribers.size && busBackend() === "memory";
 
@@ -118,11 +139,13 @@ export async function notifyRoutes(app) {
     }
     set.add(socket);
 
-    // A logged-out session stops getting hints within RECHECK_MS.
-    const recheck = setInterval(async () => {
-      const still = await sessionUser(token).catch(() => user);
+    // A logged-out session stops getting hints within RECHECK_MS, or at once
+    // when the logout is announced (recheckSockets).
+    socket.recheck = async () => {
+      const still = await sessionUser(token).catch(() => user);   // a db blip is not a revocation
       if (!still) { drop(); socket.close(4401, "unauthenticated"); }
-    }, RECHECK_MS);
+    };
+    const recheck = setInterval(socket.recheck, RECHECK_MS);
     recheck.unref();
 
     drop = () => {

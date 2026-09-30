@@ -7,7 +7,10 @@
  *     connected to the other;
  *   - a presence frame crosses nodes, and isn't echoed to its sender;
  *   - a membership change at one node clears the other's roster cache at
- *     once (a stale cache would keep hinting a member who has left).
+ *     once (a stale cache would keep hinting a member who has left);
+ *   - ending a session, or leaving a channel, at one node closes the
+ *     affected sockets at the other at once. Node B's periodic recheck is
+ *     set to a minute, so a prompt close can only come from the push.
  *
  * Needs REDIS_URL; without it there's only ever one node, and this skips.
  */
@@ -34,7 +37,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const apiDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const nodeB = spawn(process.execPath, ["src/server.js"], {
-  cwd: apiDir, env: { ...process.env, PORT: PORT_B }, stdio: "inherit",
+  cwd: apiDir, env: { ...process.env, PORT: PORT_B, PRESENCE_RECHECK_MS: "60000" }, stdio: "inherit",
 });
 process.on("exit", () => nodeB.kill("SIGTERM"));
 for (let i = 0; ; i++) {
@@ -63,6 +66,7 @@ const api = async (base, user, method, p, body) => {
 const socket = (url, user, onData) => new Promise((resolve, reject) => {
   const ws = new WebSocket(url, { headers: { cookie: user.cookie, ...(ORIGIN ? { origin: ORIGIN } : {}) } });
   ws.got = [];
+  ws.on("close", (code) => { ws.closedWith = code; });
   ws.on("message", (d) => ws.got.push(onData(d)));
   ws.on("open", () => resolve(ws));
   ws.on("error", reject);
@@ -112,6 +116,9 @@ console.log("· presence frames cross nodes, not echoed");
 await post(B);
 await sleep(300);
 hintsAtB.got.length = 0;
+// Bob's presence socket at B must close as soon as he leaves at A.
+const bobRoom = await socket(B.replace(/^http/, "ws") + room, bob, (d) => d.toString());
+await sleep(200);
 // Bob leaves through A; B must forget its roster now, not in 5 s.
 const left = await api(A, bob, "POST", `/api/channels/${ch.id}/leave`, {});
 assert.equal(left.status, 200, "bob leaves at A");
@@ -121,6 +128,27 @@ await sleep(300);
 assert.deepEqual(hintsAtB.got, [], "a member who left at A must stop getting hints for messages posted at B");
 hintsAtB.close();
 console.log("· a membership change at A clears B's roster cache");
+assert.equal(bobRoom.closedWith, 4403, "leaving at A closes bob's presence socket at B at once");
+console.log("· leaving at A closes the leaver's presence socket at B at once");
+
+// ------------------------------------------------ ending a session
+
+// Alice signs in on a second browser, whose sockets land on B; she ends that
+// session from the first, through A.
+const other = crypto.randomBytes(32).toString("base64url");
+const { rows: [second] } = await q(
+  "INSERT INTO sessions(user_id, token_hash, expires_at) VALUES ($1,$2, now() + interval '1 hour') RETURNING id",
+  [alice.id, sha256(other)]);
+const phone = { ...alice, cookie: `dp_session=${other}` };
+const phoneHints = await socket(B.replace(/^http/, "ws") + "/api/live", phone, (d) => JSON.parse(d));
+const phoneRoom = await socket(B.replace(/^http/, "ws") + room, phone, (d) => d.toString());
+await sleep(200);
+const ended = await api(A, alice, "POST", `/api/auth/sessions/${second.id}/revoke`, {});
+assert.equal(ended.status, 200, "alice ends her other session at A");
+await sleep(500);
+assert.equal(phoneHints.closedWith, 4401, "the ended session's hint socket at B closes at once");
+assert.equal(phoneRoom.closedWith, 4403, "and so does its presence socket");
+console.log("· ending a session at A closes its sockets at B at once");
 
 await q("DELETE FROM users WHERE handle = ANY($1)", [["cl_alice", "cl_bob"]]);
 await pool.end();
