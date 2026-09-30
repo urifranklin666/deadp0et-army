@@ -340,7 +340,11 @@ console.log("· a removed member forgets the group and can be re-invited");
 // Bob leaves the second room. His access ends and his device forgets it...
 as(bob);
 const { A: A2, B: B2 } = second;
+B2.saveDraft("half-written reply");
+await new Promise((r) => setTimeout(r, 400));          // saved once typing pauses (250 ms)
+assert.equal(await store.get(K.draft(bob.handle, A2.groupId)), "half-written reply", "a draft is saved");
 await B2.leave();
+assert.equal(await store.get(K.draft(bob.handle, A2.groupId)), undefined, "leaving deletes the channel's draft");
 assert.equal(B2.client, null);
 assert.equal(await store.get(K.groupState(bob.handle, A2.groupId)), undefined,
   "leaving should wipe the group's keys from this device");

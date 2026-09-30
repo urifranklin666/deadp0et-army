@@ -89,6 +89,7 @@ export const K = {
   history: (handle, groupId) => `hist:${handle}:${groupId}`,        // { chunks } (or, before chunking, the whole array)
   historyChunk: (handle, groupId, i) => `hist:${handle}:${groupId}:${i}`,
   ydoc: (handle, groupId) => `ydoc:${handle}:${groupId}`,
+  draft: (handle, groupId) => `draft:${handle}:${groupId}`,        // unsent composer text
   pendingCommit: (handle, groupId) => `pc:${handle}:${groupId}`,   // { before, epoch, since } while a commit is in flight
   leafRegistered: (handle, groupId) => `lr:${handle}:${groupId}`,  // this device's leaf key is in the directory
   evictionReport: (handle, groupId) => `ev:${handle}:${groupId}`,  // an eviction the server hasn't heard of yet
