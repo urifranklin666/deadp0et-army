@@ -65,6 +65,13 @@ async function drain(s) {
 const texts = (s) => s.history.filter((h) => h.text !== undefined && !h.mine).map((h) => h.text);
 const errors = (s) => s.history.filter((h) => h.error);
 const settle = () => new Promise((r) => setTimeout(r, 50));
+/** Every transcript key stored for one group (the index and its chunks). */
+async function histKeys(handle, groupId) {
+  const found = [];
+  const prefix = `hist:${handle}:${groupId}`;
+  await store.deleteWhere((k) => { if (String(k).startsWith(prefix)) found.push(String(k)); return false; });
+  return found.sort();
+}
 
 const alice = await seedUser("sess_alice");
 const bob = await seedUser("sess_bob");
@@ -337,6 +344,7 @@ await B2.leave();
 assert.equal(B2.client, null);
 assert.equal(await store.get(K.groupState(bob.handle, A2.groupId)), undefined,
   "leaving should wipe the group's keys from this device");
+assert.deepEqual(await histKeys(bob.handle, A2.groupId), [], "and its transcript, every chunk of it");
 const bobIn = await q(
   "SELECT 1 FROM channel_members WHERE channel_id=$1 AND user_id=$2", [A2.channel.id, bob.id]);
 assert.equal(bobIn.rowCount, 0, "leaving should end channel membership");
@@ -404,9 +412,9 @@ api.postMessage = async (gid, body) => {
   if (body.kind === "commit") committed = true;
   return r;
 };
-store.setMany = async (entries) => {
+store.setMany = async (...args) => {
   if (committed) { committed = false; throw new Error("tab closed"); }
-  return realSetMany(entries);
+  return realSetMany(...args);
 };
 await assert.rejects(reloaded.invite(carol.handle), /tab closed/);
 store.setMany = realSetMany;
@@ -639,6 +647,48 @@ console.log("· reopening a group registers a legacy leaf's key, with proof");
   assert.equal(seen.claimed, alice.handle, "and flags the credential's false claim");
 }
 console.log("· a leaf claiming someone else's name is attributed to its key's real owner, flagged");
+
+// ------------------------------- the transcript is saved in chunks
+
+// A long transcript: a save must write only the chunk that changed, not the
+// whole history, and a reload must put the chunks back together in order.
+{
+  const { A: L } = await room("long");
+  as(alice);
+  for (let i = 0; i < 600; i++) L.history.push({ seq: 0, at: "2026-01-01T00:00:00Z", notice: `old line ${i}` });
+  await L.send("first after the backlog");        // writes every chunk once
+
+  const realSave = store.setMany;
+  let written = [];
+  store.setMany = async (entries, deletes) => {
+    written = entries.map(([k]) => k).filter((k) => k.startsWith("hist:"));
+    return realSave(entries, deletes);
+  };
+  await L.send("second after the backlog");
+  store.setMany = realSave;
+  const lastChunk = Math.floor((L.history.length - 1) / 250);
+  assert.deepEqual(written.sort(), [K.history(alice.handle, L.groupId), K.historyChunk(alice.handle, L.groupId, lastChunk)].sort(),
+    "a new message rewrites only the last chunk (and the index)");
+
+  const L2 = new GroupSession(alice.handle, aDev, L.channel);
+  assert.equal(await L2.open(L.groupId), true);
+  assert.deepEqual(L2.history, L.history, "a reload reassembles the transcript in order");
+
+  // A transcript stored as one array (before chunking) still loads, and is
+  // converted at the next save.
+  const legacy = [...L.history];
+  await store.delMany(await histKeys(alice.handle, L.groupId));
+  await store.set(K.history(alice.handle, L.groupId), legacy);
+  const L3 = new GroupSession(alice.handle, aDev, L.channel);
+  assert.equal(await L3.open(L.groupId), true);
+  assert.deepEqual(L3.history, legacy, "a pre-chunking transcript loads as it was");
+  await L3.send("after the upgrade");
+  assert.deepEqual(await store.get(K.history(alice.handle, L.groupId)), { chunks: Math.ceil(L3.history.length / 250) });
+  const L4 = new GroupSession(alice.handle, aDev, L.channel);
+  await L4.open(L.groupId);
+  assert.deepEqual(L4.history, L3.history, "and is stored as chunks from then on");
+}
+console.log("· the transcript is stored in chunks; a new message rewrites only the last one");
 
 await settle();                                     // let fire-and-forget cursor reports land
 await q("DELETE FROM users WHERE handle = ANY($1)", [["sess_alice", "sess_bob", "sess_carol", "sess_dave", "sess_mallory"]]);
