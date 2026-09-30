@@ -170,6 +170,7 @@ suite needs no browser: it seeds sessions in Postgres and runs `session.js`
 in Node over an in-memory IndexedDB.
 
 ```bash
+pnpm lint                               # undefined/unused identifiers, hook rules
 pnpm test                               # every suite below that runs locally
 ```
 

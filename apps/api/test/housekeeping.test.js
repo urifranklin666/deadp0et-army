@@ -188,7 +188,7 @@ for (let i = 0; i < 4; i++) {
 }
 assert.deepEqual(statuses, [200, 200, 200, 429], "a 4th unused claim against one device must be refused");
 // A fresh session for the same user is the same claimer.
-const again = await q(
+await q(
   "INSERT INTO sessions(user_id, token_hash, expires_at) VALUES ($1,$2, now() + interval '1 hour')",
   [drainer.id, sha256("second-session")]);
 const second = await api({ cookie: "dp_session=second-session", headers: { "x-forwarded-for": "10.98.1.1" } },

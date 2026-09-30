@@ -1,170 +1,18 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import {
-  AlertTriangle, Check, Fingerprint, Hash, KeyRound, Loader2, LogOut, Plus,
-  ChevronLeft, MessageSquare, PenLine, RefreshCw, Send, Shield, Skull, UserPlus, Users, X,
-} from "lucide-react";
-import Canvas from "./Canvas.jsx";
+import { Hash, Loader2, LogOut, Plus, Skull } from "lucide-react";
+import AuthScreen from "./AuthScreen.jsx";
+import Conversation, { EmptyState } from "./Conversation.jsx";
 import { ChoiceModal, ConfirmModal, PromptModal } from "./Modal.jsx";
+import { Banner } from "./ui.jsx";
 import { api } from "./lib/api.js";
-import { store, K } from "./lib/db.js";
-import { GroupSession, SUITE, ensureDevice, login, register } from "./lib/session.js";
+import { GroupSession, SUITE, ensureDevice } from "./lib/session.js";
 import { Hints } from "./lib/hints.js";
 
 const SYNC_MS = 2500;
 // While the hint socket is up, the api tells us when to fetch; polling only
 // covers a hint that got lost.
 const FALLBACK_MS = 20_000;
-// eslint-disable-next-line no-undef
 const BUILD = typeof __BUILD__ === "string" ? __BUILD__ : "dev";  // set by vite.config.js
-
-/* ------------------------------------------------------------ primitives */
-
-/** "14:05" today, "Mar 3 14:05" otherwise. */
-function fmtTime(iso) {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  return d.toDateString() === new Date().toDateString()
-    ? time
-    : `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${time}`;
-}
-
-function Glass({ className = "", children }) {
-  const positioned = /(^|\s)(absolute|fixed|sticky)(\s|$)/.test(className);
-  return (
-    <div className={`${positioned ? "" : "relative "}rounded-xl border border-white/10 bg-white/[0.035] backdrop-blur-xl ${className}`}>
-      {children}
-    </div>
-  );
-}
-
-function Button({ children, icon: Icon, busy, variant = "primary", className = "", ...rest }) {
-  const skins = {
-    primary: "bg-gradient-to-r from-rose-600 to-red-700 text-white shadow-[0_0_30px_-10px_rgba(244,63,94,0.9)] hover:-translate-y-0.5",
-    ghost: "border border-white/15 bg-white/5 text-slate-200 hover:border-rose-500/50 hover:text-white",
-  };
-  return (
-    <button
-      {...rest}
-      disabled={busy || rest.disabled}
-      className={`inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold
-        transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400
-        disabled:cursor-not-allowed disabled:opacity-40 ${skins[variant]} ${className}`}
-    >
-      {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : Icon ? <Icon className="h-4 w-4" /> : null}
-      {children}
-    </button>
-  );
-}
-
-function Banner({ kind = "error", children, onClose }) {
-  const skins = {
-    error: "border-rose-500/40 bg-rose-950/40 text-rose-200",
-    info: "border-cyan-500/30 bg-cyan-950/30 text-cyan-200",
-    ok: "border-emerald-500/30 bg-emerald-950/30 text-emerald-200",
-  };
-  return (
-    <div className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-xs ${skins[kind]}`}>
-      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-      <span className="min-w-0 flex-1 break-words">{children}</span>
-      {onClose ? (
-        <button onClick={onClose} className="shrink-0 opacity-60 hover:opacity-100" aria-label="Dismiss">
-          <X className="h-3.5 w-3.5" />
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------- auth gate */
-
-function AuthScreen({ onAuthed, bootError }) {
-  const [handle, setHandle] = useState("");
-  const [busy, setBusy] = useState(null);
-  const [localErr, setLocalErr] = useState(null);
-  // A failure *after* the passkey succeeds (device or key-package setup) must
-  // not vanish just because we fell back to this screen.
-  const err = localErr || bootError;
-  const setErr = setLocalErr;
-
-  const run = async (fn, mode) => {
-    setErr(null);
-    setBusy(mode);
-    try {
-      const res = await fn(handle.trim().toLowerCase());
-      onAuthed(res.handle || handle.trim().toLowerCase());
-    } catch (e) {
-      // WebAuthn rejections are noisy DOMExceptions; make them legible.
-      const msg = e.name === "NotAllowedError"
-        ? "Passkey prompt dismissed or timed out."
-        : e.message || String(e);
-      setErr(msg);
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const valid = /^[a-z0-9_]{3,32}$/.test(handle.trim().toLowerCase());
-
-  return (
-    <div className="flex min-h-full items-center justify-center p-6">
-      <div aria-hidden className="pointer-events-none fixed inset-0">
-        <div className="absolute -left-24 top-10 h-96 w-96 rounded-full bg-rose-600/15 blur-[130px]" />
-        <div className="absolute -right-24 bottom-10 h-96 w-96 rounded-full bg-fuchsia-600/10 blur-[130px]" />
-      </div>
-
-      <Glass className="w-full max-w-md p-8">
-        <div className="flex items-center gap-2.5">
-          <span className="flex h-9 w-9 items-center justify-center rounded-lg border border-rose-500/40 bg-rose-600/10">
-            <Skull className="h-5 w-5 text-rose-400" strokeWidth={1.75} />
-          </span>
-          <span className="text-sm font-black tracking-[0.2em] text-white">
-            DEADP0ET<span className="text-rose-500">.ARMY</span>
-          </span>
-        </div>
-
-        <h1 className="mt-6 text-2xl font-black tracking-tight text-white">Console access</h1>
-        <p className="mt-1.5 text-sm text-slate-400">
-          Passkey only. There is no password to steal, phish, or reuse.
-        </p>
-
-        <label htmlFor="handle" className="mt-6 block text-[11px] uppercase tracking-widest text-slate-500">
-          Handle
-        </label>
-        <input
-          id="handle"
-          value={handle}
-          onChange={(e) => setHandle(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && valid) run(login, "login"); }}
-          placeholder="ghost_01"
-          autoComplete="username webauthn"
-          spellCheck={false}
-          className="mt-2 w-full rounded-lg border border-white/10 bg-black/50 px-3 py-2.5 font-mono text-sm text-white
-            outline-none transition-colors placeholder:text-slate-600 focus:border-rose-500/60"
-        />
-        <p className="mt-1.5 text-[11px] text-slate-600">3–32 chars: a–z, 0–9, underscore.</p>
-
-        {err ? <div className="mt-4"><Banner onClose={() => setErr(null)}>{err}</Banner></div> : null}
-
-        <div className="mt-6 flex gap-2">
-          <Button icon={Fingerprint} busy={busy === "login"} disabled={!valid || busy}
-            onClick={() => run(login, "login")} className="flex-1">
-            Sign in
-          </Button>
-          <Button icon={KeyRound} variant="ghost" busy={busy === "register"} disabled={!valid || busy}
-            onClick={() => run(register, "register")} className="flex-1">
-            Create passkey
-          </Button>
-        </div>
-
-        <p className="mt-6 border-t border-white/10 pt-4 text-[11px] leading-relaxed text-slate-600">
-          Keys are generated on this device and never leave it. Clearing site data for this
-          origin destroys your group history — we cannot restore it, which is rather the point.
-        </p>
-      </Glass>
-    </div>
-  );
-}
 
 /* -------------------------------------------------------------- main app */
 
@@ -174,7 +22,7 @@ function App() {
   const [deviceId, setDeviceId] = useState(null);
   const [channels, setChannels] = useState([]);
   const [active, setActive] = useState(null);     // GroupSession
-  const [tick, setTick] = useState(0);            // forces re-render on sync
+  const [, setTick] = useState(0);            // forces re-render on sync
   const [err, setErr] = useState(null);
   const [notice, setNotice] = useState(null);
   const [busy, setBusy] = useState(null);
@@ -202,7 +50,6 @@ function App() {
       }
     })();
     return () => { dead = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function boot(h) {
@@ -278,9 +125,7 @@ function App() {
       setActive(s);
       setNotice(`#${ch.slug} created — you are its only member until you invite someone.`);
       bump();
-    } catch (e) {
-      throw e;               // surfaced inline by the modal
-    } finally {
+    } finally {                // errors surface inline in the modal
       setBusy(null);
     }
   }
@@ -563,226 +408,6 @@ function App() {
         />
       ) : null}
     </div>
-  );
-}
-
-function EmptyState() {
-  return (
-    <div className="flex flex-1 items-center justify-center p-8 text-center">
-      <div className="max-w-sm">
-        <Shield className="mx-auto h-8 w-8 text-slate-700" />
-        <p className="mt-3 text-sm text-slate-500">Pick a channel, or create one.</p>
-        <p className="mt-1 text-[11px] leading-relaxed text-slate-600">
-          Each channel is an MLS group. Messages are encrypted once for the whole group and the
-          server stores only ciphertext it cannot read.
-        </p>
-      </div>
-    </div>
-  );
-}
-
-/**
- * Who is in the channel, per the server's roster. Refetched whenever the
- * epoch moves, since adds are commits. (This is membership of the channel,
- * i.e. who may fetch its ciphertext; who can decrypt is the MLS group.)
- */
-function Members({ session, openModal }) {
-  const [members, setMembers] = useState(null);
-  const [open, setOpen] = useState(false);
-  const ref = useRef(null);
-
-  useEffect(() => {
-    if (session.removed) return undefined;    // the roster is no longer ours to read
-    let dead = false;
-    api.members(session.channel.id)
-      .then((r) => { if (!dead) setMembers(r.members); })
-      .catch(() => { if (!dead) setMembers(null); });
-    return () => { dead = true; };
-  }, [session.channel.id, session.epoch, session.removed]);
-
-  useEffect(() => {
-    if (!open) return;
-    const close = (e) => { if (!ref.current?.contains(e.target)) setOpen(false); };
-    const esc = (e) => { if (e.key === "Escape") setOpen(false); };
-    document.addEventListener("mousedown", close);
-    document.addEventListener("keydown", esc);
-    return () => { document.removeEventListener("mousedown", close); document.removeEventListener("keydown", esc); };
-  }, [open]);
-
-  if (!members || session.removed) return null;
-  // The server enforces this too; here it only decides whether to offer it.
-  const mine = members.find((m) => m.handle === session.handle);
-  const canRemove = (m) => ["owner", "admin"].includes(mine?.role)
-    && m.handle !== session.handle && m.role !== "owner" && !!session.client;
-  return (
-    <div ref={ref} className="relative">
-      <button onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-label="Members"
-        className="flex items-center gap-1 rounded px-1.5 py-1 font-mono text-[11px] text-slate-400 hover:bg-white/5 hover:text-white">
-        <Users className="h-3.5 w-3.5" />{members.length}
-      </button>
-      {open ? (
-        <ul className="absolute right-0 top-full z-20 mt-1 max-h-72 min-w-[12rem] overflow-y-auto rounded-lg border
-          border-white/10 bg-[#0b0d14] p-1 shadow-2xl">
-          {members.map((m) => (
-            <li key={m.handle} className="flex items-center justify-between gap-3 rounded px-2 py-1.5 text-xs">
-              <span className="font-mono text-slate-200">{m.handle}</span>
-              {m.role !== "member" ? (
-                <span className="text-[10px] uppercase tracking-wider text-rose-400/80">{m.role}</span>
-              ) : canRemove(m) ? (
-                <button onClick={() => { setOpen(false); openModal({ kind: "remove", session, handle: m.handle }); }}
-                  className="rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-slate-500
-                    hover:bg-rose-600/20 hover:text-rose-300">
-                  Remove
-                </button>
-              ) : null}
-            </li>
-          ))}
-          {mine && mine.role !== "owner" && session.client ? (
-            <li className="mt-1 border-t border-white/10 pt-1">
-              <button onClick={() => { setOpen(false); openModal({ kind: "leave", session }); }}
-                className="w-full rounded px-2 py-1.5 text-left text-xs text-slate-400 hover:bg-rose-600/20 hover:text-rose-300">
-                Leave channel
-              </button>
-            </li>
-          ) : null}
-        </ul>
-      ) : null}
-    </div>
-  );
-}
-
-function Conversation({ session, onError, onChange, openModal, onBack }) {
-  const [draft, setDraft] = useState("");
-  const [busy, setBusy] = useState(null);
-  const [mode, setMode] = useState(session.channel.kind === "canvas" ? "canvas" : "chat");
-  const endRef = useRef(null);
-
-  useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [session.history.length]);
-
-  // A removed session keeps its transcript readable but can no longer act.
-  const joined = !!session.client && !session.removed;
-
-  const send = async () => {
-    const text = draft.trim();
-    if (!text || !joined) return;
-    setBusy("send");
-    setDraft("");
-    try { await session.send(text); onChange(); }
-    catch (e) { onError(e.message); setDraft(text); }
-    finally { setBusy(null); }
-  };
-
-  const invite = () => openModal({ kind: "invite", session });
-
-  return (
-    <>
-      <div className="flex shrink-0 items-center gap-2 border-b border-white/10 px-3 py-2.5 sm:gap-3 sm:px-4">
-        <button onClick={onBack} aria-label="Back to channels"
-          className="-ml-1 rounded p-1 text-slate-400 hover:bg-white/5 hover:text-white md:hidden">
-          <ChevronLeft className="h-4 w-4" />
-        </button>
-        <Hash className="hidden h-4 w-4 shrink-0 text-slate-600 sm:block" />
-        <span className="min-w-0 truncate text-sm font-semibold text-white">{session.channel.slug}</span>
-        <span className="hidden shrink-0 rounded border border-white/10 px-1.5 py-0.5 font-mono text-[10px] text-slate-500 sm:inline">
-          epoch {session.epoch ?? "—"}
-        </span>
-
-        <div className="flex shrink-0 rounded-lg border border-white/10 bg-white/5 p-0.5 sm:ml-4">
-          {[["chat", "Chat", MessageSquare], ["canvas", "Canvas", PenLine]].map(([id, label, Icon]) => (
-            <button key={id} onClick={() => setMode(id)}
-              className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors
-                ${mode === id ? "bg-rose-600 text-white" : "text-slate-400 hover:text-white"}`}>
-              <Icon className="h-3 w-3" /><span className="sr-only sm:not-sr-only">{label}</span>
-            </button>
-          ))}
-        </div>
-
-        <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-2">
-          <Members session={session} openModal={openModal} />
-          <button onClick={async () => { try { await session.sync(); onChange(); } catch (e) { onError(e.message); } }}
-            className="rounded p-1.5 text-slate-500 hover:bg-white/5 hover:text-white" aria-label="Sync">
-            <RefreshCw className="h-3.5 w-3.5" />
-          </button>
-          <Button icon={UserPlus} variant="ghost" disabled={!joined}
-            onClick={invite} className="!px-2 !py-1.5 !text-xs sm:!px-3">
-            <span className="sr-only sm:not-sr-only">Invite</span>
-          </Button>
-        </div>
-      </div>
-
-      {mode === "canvas" ? <Canvas session={session} onError={onError} openModal={openModal} /> : (
-      <>
-      <div className="dp-scroll min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        {!session.client && !session.removed ? (
-          <p className="mx-auto max-w-sm text-center text-[11px] leading-relaxed text-slate-600">
-            This device isn't a member yet. Once someone invites you, the Welcome arrives on the
-            next poll and history starts from that point — earlier traffic stays unreadable, by design.
-            If another of your devices is in this channel, invite your own handle from there.
-          </p>
-        ) : session.history.length === 0 ? (
-          <p className="mx-auto max-w-sm text-center text-[11px] text-slate-600">
-            Nothing here yet. Say something unwise.
-          </p>
-        ) : (
-          <ul className="space-y-2">
-            {session.history.map((m) => (
-              <li key={m.seq} className="animate-[dp-rise_0.25s_ease-out_both]">
-                {m.notice ? (
-                  <div className="flex items-start gap-2 rounded-lg border border-cyan-500/25 bg-cyan-950/20 px-3 py-2 text-[11px] text-cyan-200">
-                    <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
-                    <span>{m.notice}</span>
-                  </div>
-                ) : m.error ? (
-                  <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-950/20 px-3 py-2 text-[11px] text-amber-300">
-                    <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
-                    <span>seq {m.seq}: undecryptable — {m.error}</span>
-                  </div>
-                ) : (
-                  <div className={`flex ${m.mine ? "justify-end" : "justify-start"}`}>
-                    <div className={`max-w-[75%] rounded-xl px-3 py-2 text-sm
-                      ${m.mine ? "bg-rose-600/25 text-rose-50" : "border border-white/10 bg-white/[0.04] text-slate-200"}`}>
-                      {!m.mine && m.from ? (
-                        <p className="mb-0.5 font-mono text-[10px] font-semibold text-cyan-300/80">{m.from}</p>
-                      ) : null}
-                      <p className="whitespace-pre-wrap break-words">{m.text}</p>
-                      <p className="mt-1 font-mono text-[9px] text-slate-500">
-                        {m.at ? <time dateTime={m.at} title={new Date(m.at).toLocaleString()}>{fmtTime(m.at)}</time> : null}
-                        {m.at ? " · " : null}#{m.seq}
-                      </p>
-                    </div>
-                  </div>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
-        <div ref={endRef} />
-      </div>
-
-      <div className="shrink-0 border-t border-white/10 p-3">
-        <div className="flex items-end gap-2">
-          <textarea
-            rows={1}
-            value={draft}
-            disabled={!joined}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-            placeholder={joined
-              // The full line wraps (and clips) in a one-row box on a phone.
-              ? (window.matchMedia?.("(max-width: 639px)").matches ? "Encrypted before it leaves…" : "Encrypted before it leaves this tab…")
-              : session.removed ? "Removed from this channel" : "Not a member yet"}
-            className="dp-scroll max-h-32 min-h-[38px] flex-1 resize-none rounded-lg border border-white/10 bg-black/50
-              px-3 py-2 text-sm text-white outline-none transition-colors placeholder:text-slate-600
-              focus:border-rose-500/60 disabled:opacity-50"
-          />
-          <Button icon={Send} busy={busy === "send"} disabled={!joined || !draft.trim()} onClick={send}>
-            Send
-          </Button>
-        </div>
-      </div>
-      </>
-      )}
-    </>
   );
 }
 
