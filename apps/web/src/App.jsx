@@ -8,7 +8,7 @@ import { ChoiceModal, ConfirmModal, PromptModal } from "./Modal.jsx";
 import { Banner } from "./ui.jsx";
 import { api } from "./lib/api.js";
 import { belongsTo, store } from "./lib/db.js";
-import { GroupSession, SUITE, ensureDevice, withReauth } from "./lib/session.js";
+import { withReauth } from "./lib/passkeys.js";
 import { Hints } from "./lib/hints.js";
 import { claimTab } from "./lib/tablock.js";
 import { notify, notificationsOn, setNotifications } from "./lib/notifications.js";
@@ -18,6 +18,13 @@ const SYNC_MS = 2500;
 // covers a hint that got lost.
 const FALLBACK_MS = 20_000;
 const BUILD = typeof __BUILD__ === "string" ? __BUILD__ : "dev";  // set by vite.config.js
+
+// The MLS stack is most of the bundle and nothing before sign-in needs it:
+// start fetching it now, in parallel, and let the passkey screen paint first.
+// A failed fetch is retried the next time it's needed.
+let sessionModule = null;
+const loadSession = () => (sessionModule ??= import("./lib/session.js").catch((e) => { sessionModule = null; throw e; }));
+loadSession().catch(() => {});
 
 /* -------------------------------------------------------------- main app */
 
@@ -41,6 +48,7 @@ function App() {
   channelsRef.current = channels;
   const [notifyOn, setNotifyOn] = useState(() => notificationsOn());
   const [modal, setModal] = useState(null);
+  const mls = useRef(null);                       // lib/session.js, once loaded
 
   const bump = useCallback(() => setTick((t) => t + 1), []);
 
@@ -64,7 +72,8 @@ function App() {
     setHandle(h);
     // Before touching any key material: another tab may already be using it.
     if (!(await claimTab(h))) { setPhase("elsewhere"); return; }
-    const { deviceId: id } = await ensureDevice(h);
+    mls.current = await loadSession();
+    const { deviceId: id } = await mls.current.ensureDevice(h);
     setDeviceId(id);
     const { channels: list } = await api.channels();
     setChannels(list);
@@ -95,7 +104,7 @@ function App() {
     // rather than leaving the channel stuck until a reload.
     if (!s || !s.client) {
       if (!s) {
-        s = new GroupSession(handle, deviceId, ch);
+        s = new mls.current.GroupSession(handle, deviceId, ch);
         sessions.current.set(ch.id, s);
       }
       try {
@@ -127,7 +136,7 @@ function App() {
     setErr(null);
     try {
       const ch = await api.createChannel(slug.trim().toLowerCase(), "chat");
-      const s = new GroupSession(handle, deviceId, ch);
+      const s = new mls.current.GroupSession(handle, deviceId, ch);
       await s.open(null);                       // founds the MLS group
       sessions.current.set(ch.id, s);
       const withGroup = { ...ch, groupId: s.groupId };
@@ -318,7 +327,7 @@ function App() {
           DEADP0ET<span className="text-rose-500">.ARMY</span>
         </span>
         <span className="ml-2 hidden rounded border border-white/10 px-2 py-0.5 font-mono text-[10px] text-slate-500 sm:inline">
-          {SUITE}
+          {mls.current?.SUITE}
         </span>
         <div className="ml-auto flex items-center gap-3">
           <span className="hidden font-mono text-[10px] text-slate-600 sm:inline">build {BUILD}</span>

@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { KeyRound, Loader2, Plus, Trash2 } from "lucide-react";
 import { Shell } from "./Modal.jsx";
 import { api } from "./lib/api.js";
-import { addPasskey, withReauth } from "./lib/session.js";
+import { addPasskey, withReauth } from "./lib/passkeys.js";
 import { fmtTime } from "./ui.jsx";
 
 /**

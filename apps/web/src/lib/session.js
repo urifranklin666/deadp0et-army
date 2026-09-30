@@ -1,11 +1,13 @@
 import * as Y from "yjs";
-import { startRegistration, startAuthentication } from "@simplewebauthn/browser";
 import { MlsClient, SUITE, b64, unb64, keyPackageIdentity } from "@deadp0et/crypto/mls";
 import { api } from "./api.js";
 import { store, K } from "./db.js";
 import { T, decodeEnvelope, encodeEnvelope } from "./envelope.js";
 
 export { SUITE };
+// Kept importable from here; they live apart so the sign-in screen can load
+// without the MLS stack.
+export { register, login, withReauth, addPasskey } from "./passkeys.js";
 
 // Republish the whole board every N canvas messages. Low enough that a device
 // which falls behind has a recent self-contained state to start from, high
@@ -23,18 +25,6 @@ const KP_LOW_WATER = 3;
 const KP_TARGET = 8;
 
 /* --------------------------------------------------------------- identity */
-
-export async function register(handle) {
-  const { userId, options } = await api.post("/api/auth/register/start", { handle });
-  const attResp = await startRegistration({ optionsJSON: options });
-  return api.post("/api/auth/register/finish", { userId, response: attResp });
-}
-
-export async function login(handle) {
-  const { options } = await api.post("/api/auth/login/start", { handle });
-  const assertion = await startAuthentication({ optionsJSON: options });
-  return api.post("/api/auth/login/finish", { response: assertion, challenge: options.challenge });
-}
 
 /**
  * Signature key (base64) -> the handle whose authenticated upload registered
@@ -60,37 +50,6 @@ async function ownersOf(keys) {
     }
   }
   return keyOwners;
-}
-
-/**
- * Run `fn`; if the server wants a fresh passkey proof first (it does for
- * passkey changes and account deletion), do the step-up ceremony and retry
- * once. Within the server's window, later sensitive calls don't prompt again.
- */
-export async function withReauth(fn) {
-  const stepUp = async () => {
-    const { options } = await api.post("/api/auth/reauth/start", {});
-    const assertion = await startAuthentication({ optionsJSON: options });
-    await api.post("/api/auth/reauth/finish", { response: assertion });
-  };
-  if (!(await api.get("/api/auth/reauth").catch(() => ({ recent: false }))).recent) await stepUp();
-  try {
-    return await fn();
-  } catch (e) {
-    // The proof lapsed between the check and the call: once more.
-    if (e.status !== 403 || e.message !== "reauth_required") throw e;
-    await stepUp();
-    return fn();
-  }
-}
-
-/** Register another passkey for the signed-in account (a backup). */
-export function addPasskey() {
-  return withReauth(async () => {
-    const { options } = await api.post("/api/auth/passkeys/start", {});
-    const attResp = await startRegistration({ optionsJSON: options });
-    return api.post("/api/auth/passkeys/finish", { response: attResp });
-  });
 }
 
 /**
