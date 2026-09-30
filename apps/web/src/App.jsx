@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle, Check, Fingerprint, Hash, KeyRound, Loader2, LogOut, Plus,
-  MessageSquare, PenLine, RefreshCw, Send, Shield, Skull, UserPlus, Users, X,
+  ChevronLeft, MessageSquare, PenLine, RefreshCw, Send, Shield, Skull, UserPlus, Users, X,
 } from "lucide-react";
 import Canvas from "./Canvas.jsx";
 import { ChoiceModal, ConfirmModal, PromptModal } from "./Modal.jsx";
@@ -421,7 +421,8 @@ function App() {
 
       <div className="flex min-h-0 flex-1">
         {/* channels */}
-        <aside className="flex w-56 shrink-0 flex-col border-r border-white/10">
+        {/* Phones show the list OR the open channel; md+ shows both. */}
+        <aside className={`${active ? "hidden md:flex" : "flex"} w-full shrink-0 flex-col border-white/10 md:w-56 md:border-r`}>
           <div className="flex items-center justify-between px-3 py-2.5">
             <span className="text-[10px] uppercase tracking-widest text-slate-500">Channels</span>
             <button onClick={() => setModal({ kind: "channel" })} disabled={busy === "create"}
@@ -450,7 +451,7 @@ function App() {
         </aside>
 
         {/* conversation */}
-        <main className="flex min-w-0 flex-1 flex-col">
+        <main className={`${active ? "flex" : "hidden md:flex"} min-w-0 flex-1 flex-col`}>
           {(err || notice) ? (
             <div className="space-y-2 px-4 pt-3">
               {err ? <Banner onClose={() => setErr(null)}>{err}</Banner> : null}
@@ -458,7 +459,8 @@ function App() {
             </div>
           ) : null}
           {active ? (
-            <Conversation session={active} onError={setErr} onChange={bump} openModal={setModal} />
+            <Conversation session={active} onError={setErr} onChange={bump} openModal={setModal}
+              onBack={() => setActive(null)} />
           ) : <EmptyState />}
         </main>
       </div>
@@ -649,7 +651,7 @@ function Members({ session, openModal }) {
   );
 }
 
-function Conversation({ session, onError, onChange, openModal }) {
+function Conversation({ session, onError, onChange, openModal, onBack }) {
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(null);
   const [mode, setMode] = useState(session.channel.kind === "canvas" ? "canvas" : "chat");
@@ -674,32 +676,36 @@ function Conversation({ session, onError, onChange, openModal }) {
 
   return (
     <>
-      <div className="flex shrink-0 items-center gap-3 border-b border-white/10 px-4 py-2.5">
-        <Hash className="h-4 w-4 text-slate-600" />
-        <span className="text-sm font-semibold text-white">{session.channel.slug}</span>
-        <span className="rounded border border-white/10 px-1.5 py-0.5 font-mono text-[10px] text-slate-500">
+      <div className="flex shrink-0 items-center gap-2 border-b border-white/10 px-3 py-2.5 sm:gap-3 sm:px-4">
+        <button onClick={onBack} aria-label="Back to channels"
+          className="-ml-1 rounded p-1 text-slate-400 hover:bg-white/5 hover:text-white md:hidden">
+          <ChevronLeft className="h-4 w-4" />
+        </button>
+        <Hash className="hidden h-4 w-4 shrink-0 text-slate-600 sm:block" />
+        <span className="min-w-0 truncate text-sm font-semibold text-white">{session.channel.slug}</span>
+        <span className="hidden shrink-0 rounded border border-white/10 px-1.5 py-0.5 font-mono text-[10px] text-slate-500 sm:inline">
           epoch {session.epoch ?? "—"}
         </span>
 
-        <div className="ml-4 flex rounded-lg border border-white/10 bg-white/5 p-0.5">
+        <div className="flex shrink-0 rounded-lg border border-white/10 bg-white/5 p-0.5 sm:ml-4">
           {[["chat", "Chat", MessageSquare], ["canvas", "Canvas", PenLine]].map(([id, label, Icon]) => (
             <button key={id} onClick={() => setMode(id)}
               className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors
                 ${mode === id ? "bg-rose-600 text-white" : "text-slate-400 hover:text-white"}`}>
-              <Icon className="h-3 w-3" />{label}
+              <Icon className="h-3 w-3" /><span className="sr-only sm:not-sr-only">{label}</span>
             </button>
           ))}
         </div>
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-2">
           <Members session={session} openModal={openModal} />
           <button onClick={async () => { try { await session.sync(); onChange(); } catch (e) { onError(e.message); } }}
             className="rounded p-1.5 text-slate-500 hover:bg-white/5 hover:text-white" aria-label="Sync">
             <RefreshCw className="h-3.5 w-3.5" />
           </button>
           <Button icon={UserPlus} variant="ghost" disabled={!joined}
-            onClick={invite} className="!px-3 !py-1.5 !text-xs">
-            Invite
+            onClick={invite} className="!px-2 !py-1.5 !text-xs sm:!px-3">
+            <span className="sr-only sm:not-sr-only">Invite</span>
           </Button>
         </div>
       </div>
@@ -761,7 +767,10 @@ function Conversation({ session, onError, onChange, openModal }) {
             disabled={!joined}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-            placeholder={joined ? "Encrypted before it leaves this tab…" : session.removed ? "Removed from this channel" : "Not a member yet"}
+            placeholder={joined
+              // The full line wraps (and clips) in a one-row box on a phone.
+              ? (window.matchMedia?.("(max-width: 639px)").matches ? "Encrypted before it leaves…" : "Encrypted before it leaves this tab…")
+              : session.removed ? "Removed from this channel" : "Not a member yet"}
             className="dp-scroll max-h-32 min-h-[38px] flex-1 resize-none rounded-lg border border-white/10 bg-black/50
               px-3 py-2 text-sm text-white outline-none transition-colors placeholder:text-slate-600
               focus:border-rose-500/60 disabled:opacity-50"

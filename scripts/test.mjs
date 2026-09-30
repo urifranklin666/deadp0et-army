@@ -29,7 +29,8 @@ const WEB = `http://localhost:${WEB_PORT}`;
 const SITE = `http://localhost:${SITE_PORT}`;
 
 const SUITES = browser
-  ? ["apps/web/test/e2e.mjs", "apps/web/test/canvas.mjs", "apps/web/test/presence.mjs", "apps/site/test/funnel.mjs"]
+  ? ["apps/web/test/e2e.mjs", "apps/web/test/canvas.mjs", "apps/web/test/presence.mjs",
+     "apps/web/test/mobile.mjs", "apps/site/test/funnel.mjs"]
   : [
       "apps/api/test/e2ee.test.js",
       "apps/api/test/mls.api.test.js",

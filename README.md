@@ -191,6 +191,7 @@ node apps/web/test/session.test.mjs     # client MLS bookkeeping, against the lo
 node apps/web/test/e2e.mjs              # passkey → channel → message → reload
 node apps/web/test/canvas.mjs           # CRDT convergence, late-joiner snapshot
 node apps/web/test/presence.mjs         # live cursors, log stays untouched
+node apps/web/test/mobile.mjs           # console at 390px: one pane at a time, no overflow
 node apps/site/test/funnel.mjs          # marketing → console handoff
 ```
 
