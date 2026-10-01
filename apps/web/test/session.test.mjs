@@ -763,6 +763,41 @@ console.log("· the transcript is stored in chunks; a new message rewrites only 
 }
 console.log("· message grouping never hides a trust warning or merges different keys");
 
+// ------------------------------------------------------------- reactions
+
+// Reactions are filed by signing key: each key counts once per emoji, only
+// that key can take its reaction back, and only the fixed set is accepted.
+{
+  const { A: RA, B: RB } = await room("react");
+  as(alice);
+  const msg = await RA.send("react to this");
+  assert.equal(await RA.react(msg, "👍", true), true);
+  assert.equal(await RA.react(msg, "👍", true), false, "a repeat reaction sends nothing");
+  as(bob); await drain(RB);
+  const seen = () => RB.history.find((h) => h.seq === msg).reactions;
+  assert.deepEqual(Object.values(seen()["👍"]), [alice.handle], "bob sees alice's reaction, by her name");
+  await RB.react(msg, "👍", true);
+  const junk = await RB.client.encrypt(encodeEnvelope({ t: T.REACT, s: msg, e: "💩", on: true }));
+  await api.postMessage(RB.groupId, { kind: "application", senderDeviceId: bDev, payload: b64(junk) });
+  // Bob "withdraws" a 🔥 he never gave, and can't touch alice's 👍.
+  const sneaky = await RB.client.encrypt(encodeEnvelope({ t: T.REACT, s: msg, e: "🔥", on: false }));
+  await api.postMessage(RB.groupId, { kind: "application", senderDeviceId: bDev, payload: b64(sneaky) });
+  await drain(RB);
+  as(alice); await drain(RA);
+  const mine = RA.history.find((h) => h.seq === msg).reactions;
+  assert.deepEqual(Object.keys(mine), ["👍"], "an emoji outside the set is ignored");
+  assert.deepEqual(Object.values(mine["👍"]).sort(), [alice.handle, bob.handle].sort(), "two keys, two reactions");
+  as(bob); await RB.react(msg, "👍", false);
+  as(alice); await drain(RA);
+  assert.deepEqual(Object.values(RA.history.find((h) => h.seq === msg).reactions["👍"]), [alice.handle],
+    "withdrawing removes only the withdrawer's own reaction");
+  const reopened = new GroupSession(alice.handle, aDev, RA.channel);
+  await reopened.open(RA.groupId);
+  assert.deepEqual(reopened.history.find((h) => h.seq === msg).reactions, RA.history.find((h) => h.seq === msg).reactions,
+    "reactions survive a reload");
+}
+console.log("· reactions count once per signing key, only from the set, withdrawable only by their giver");
+
 await settle();                                     // let fire-and-forget cursor reports land
 await q("DELETE FROM users WHERE handle = ANY($1)", [["sess_alice", "sess_bob", "sess_carol", "sess_dave", "sess_mallory"]]);
 await pool.end();

@@ -25,3 +25,32 @@ export function groupsWith(prev, m) {
   if (hasTrustWarning(m) || hasTrustWarning(prev)) return false;
   return !!m.key && m.key === prev.key && m.from === prev.from;
 }
+
+/**
+ * The reactions on offer. A fixed set, so a member can't hang arbitrary text
+ * (or a thousand distinct "emoji") off someone else's message.
+ */
+export const REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🔥"];
+
+/**
+ * Record one reaction on a chat entry: entry.reactions[emoji][signingKey] =
+ * handle. Filed by key, so each signing key counts once per emoji and only
+ * that key can take its reaction back. Returns whether anything changed.
+ */
+export function applyReaction(entry, emoji, key, handle, on) {
+  if (!entry || entry.text === undefined || !key || !REACTIONS.includes(emoji)) return false;
+  const all = entry.reactions || {};
+  const who = { ...(all[emoji] || {}) };
+  if (on) {
+    if (who[key] === (handle || "")) return false;
+    who[key] = handle || "";
+  } else {
+    if (!(key in who)) return false;
+    delete who[key];
+  }
+  const next = { ...all, [emoji]: who };
+  if (!Object.keys(who).length) delete next[emoji];
+  if (Object.keys(next).length) entry.reactions = next;
+  else delete entry.reactions;
+  return true;
+}

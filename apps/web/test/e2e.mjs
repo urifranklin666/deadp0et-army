@@ -290,6 +290,56 @@ await alice.page.getByText(`${bob.handle} deleted this message`).waitFor({ timeo
 assert.equal(await alice.page.getByText(REPLY).count(), 0, "the withdrawn text is gone from alice's transcript");
 await alice.page.locator("li", { hasText: ANSWER }).getByText("A deleted message").waitFor({ timeout: 10000 });
 console.log("· bob deleted his reply; alice's copy is replaced");
+
+// Formatting renders as elements, never markup: bold, code and a link (only
+// http(s), opened safely) appear on bob's side; raw HTML stays text.
+{
+  const RICH = "**bold " + rnd() + "** and `code` and https://example.com/path.";
+  await alice.page.getByPlaceholder(/Encrypted before it leaves/).fill(RICH);
+  await alice.page.getByRole("button", { name: "Send" }).click();
+  const rich = bob.page.locator("li", { hasText: "and code and" }).last();
+  await rich.waitFor({ timeout: 30000 });
+  assert.match(await rich.locator("strong").first().innerText(), /^bold /, "**bold** renders bold");
+  assert.equal(await rich.locator("code").first().innerText(), "code", "`code` renders as code");
+  const a = rich.locator('a[href="https://example.com/path"]');
+  assert.equal(await a.count(), 1, "the link is an anchor, without the trailing full stop");
+  assert.match(await a.getAttribute("rel"), /noopener/);
+  const HTML = "<img src=x onerror=alert(1)> " + rnd();
+  await alice.page.getByPlaceholder(/Encrypted before it leaves/).fill(HTML);
+  await alice.page.getByRole("button", { name: "Send" }).click();
+  await bob.page.getByText(HTML).waitFor({ timeout: 30000 });
+  assert.equal(await bob.page.locator('[role="log"] img').count(), 0, "markup in a message is shown as text");
+  console.log("· formatting renders as elements; links are http(s) only and opened safely; HTML stays text");
+}
+
+// @mentions: the composer suggests channel members; the mention of bob is
+// highlighted on his side.
+{
+  const box = alice.page.getByPlaceholder(/Encrypted before it leaves/);
+  await box.fill("");
+  await box.pressSequentially("@" + bob.handle.slice(0, 4));
+  await alice.page.getByRole("option", { name: "@" + bob.handle }).waitFor({ timeout: 10000 });
+  await box.press("Tab");
+  assert.equal(await box.inputValue(), `@${bob.handle} `, "Tab completes the mention");
+  const PING = "look at this " + rnd();
+  await box.pressSequentially(PING);
+  await box.press("Enter");
+  const pinged = bob.page.locator("li", { hasText: PING });
+  await pinged.waitFor({ timeout: 30000 });
+  assert.equal(await pinged.locator("[data-mentions-me]").count(), 1, "a mention of bob is highlighted for bob");
+  console.log("· @mentions are suggested from the roster and highlighted for the person mentioned");
+
+  // Bob reacts to it; alice sees the count, and can add her own.
+  await pinged.hover();
+  await pinged.getByRole("button", { name: "Add reaction" }).click();
+  await bob.page.getByRole("menuitem", { name: "React 👍" }).click();
+  const onAlice = alice.page.locator("li", { hasText: PING });
+  await onAlice.getByRole("button", { name: "👍 1" }).waitFor({ timeout: 30000 });
+  await onAlice.getByRole("button", { name: "👍 1" }).click();
+  await onAlice.getByRole("button", { name: "👍 2" }).waitFor({ timeout: 10000 });
+  await bob.page.locator("li", { hasText: PING }).getByRole("button", { name: "👍 2" }).waitFor({ timeout: 30000 });
+  console.log("· reactions reach the other member and add up");
+}
 // The roster lists both members once the epoch has moved.
 await alice.page.getByRole("button", { name: "Members" }).click();
 for (const h of [alice.handle, bob.handle]) {
