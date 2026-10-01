@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Bell, BellOff, Fingerprint, Hash, Laptop, Loader2, Lock, LogOut, Plus, ShieldCheck, Skull, Trash2, Users } from "lucide-react";
+import { Bell, BellOff, Fingerprint, Hash, Laptop, Loader2, Lock, LogOut, Plus, Search, ShieldCheck, Skull, Trash2, Users } from "lucide-react";
 import AuthScreen from "./AuthScreen.jsx";
 import PasskeysModal from "./Passkeys.jsx";
 import SessionsModal from "./Sessions.jsx";
 import Conversation, { EmptyState } from "./Conversation.jsx";
-import { ChoiceModal, ConfirmModal, PromptModal } from "./Modal.jsx";
+import { ChoiceModal, ConfirmModal, PromptModal, SwitcherModal } from "./Modal.jsx";
 import { Avatar, Banner } from "./ui.jsx";
 import { api } from "./lib/api.js";
 import { belongsTo, store } from "./lib/db.js";
@@ -59,6 +59,18 @@ function App() {
     const t = setTimeout(() => setNotice(null), 8000);
     return () => clearTimeout(t);
   }, [notice]);
+
+  // Ctrl/⌘+K jumps to a channel from anywhere, unless a dialog is up.
+  useEffect(() => {
+    if (phase !== "ready") return undefined;
+    const onKey = (e) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== "k") return;
+      e.preventDefault();
+      setModal((m) => (m ? m : { kind: "switch" }));
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [phase]);
 
   /* ----------------------------------------------------------- bootstrap */
 
@@ -368,6 +380,11 @@ function App() {
         <aside className={`${active ? "hidden md:flex" : "flex"} w-full shrink-0 flex-col border-white/[0.07] bg-ink-900/60 md:w-64 md:border-r`}>
           <div className="flex items-center justify-between px-4 pb-2 pt-4">
             <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Channels</span>
+            <button onClick={() => setModal({ kind: "switch" })} disabled={!channels.length}
+              className="ml-auto mr-0.5 rounded-md p-1.5 text-slate-400 transition hover:bg-white/[0.06] hover:text-white disabled:opacity-40"
+              aria-label="Jump to a channel" title={`Jump to a channel (${/Mac|iP(hone|ad)/.test(navigator.platform) ? "⌘" : "Ctrl+"}K)`}>
+              <Search className="h-4 w-4" />
+            </button>
             <button onClick={() => setModal({ kind: "channel" })} disabled={busy === "create"}
               className="rounded-md p-1.5 text-slate-400 transition hover:bg-white/[0.06] hover:text-white disabled:opacity-40"
               aria-label="New channel" title="New channel">
@@ -530,6 +547,10 @@ function App() {
         />
       ) : null}
 
+      {modal?.kind === "switch" ? (
+        <SwitcherModal channels={channels} unread={unread} activeId={active?.channel?.id}
+          onPick={openChannel} onClose={() => setModal(null)} />
+      ) : null}
       {modal?.kind === "passkeys" ? <PasskeysModal onClose={() => setModal(null)} /> : null}
       {modal?.kind === "sessions" ? <SessionsModal onClose={() => setModal(null)} /> : null}
 

@@ -423,6 +423,33 @@ console.log("· a hint marks a background channel unread; opening it clears the 
   console.log("· a New line marks where alice stopped reading, and stays put");
 }
 
+// Copy puts a message's text on the clipboard.
+{
+  await alice.page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: new URL(alice.page.url()).origin });
+  const msg = alice.page.locator("li", { hasText: AWAY }).last();
+  await msg.hover();
+  await msg.getByRole("button", { name: "Copy text" }).click();
+  await msg.getByRole("button", { name: "Copied" }).waitFor({ timeout: 5000 });
+  assert.equal(await alice.page.evaluate(() => navigator.clipboard.readText()), AWAY, "the clipboard holds the message text");
+  console.log("· Copy puts a message's text on the clipboard");
+}
+
+// Ctrl+K jumps between channels by name, from anywhere in the console.
+{
+  const current = (name) => alice.page.getByRole("button", { name: new RegExp(`^${name}`) });
+  await alice.page.keyboard.press("Control+k");
+  await alice.page.getByRole("dialog", { name: "Jump to a channel" }).waitFor({ timeout: 5000 });
+  await alice.page.keyboard.type(slug2.slice(5));       // part of the name is enough
+  await alice.page.keyboard.press("Enter");
+  await current(slug2).and(alice.page.locator("[aria-current=page]")).waitFor({ timeout: 15000 });
+  await alice.page.keyboard.press("Control+k");
+  await alice.page.keyboard.type(slug);
+  await alice.page.keyboard.press("Enter");
+  await current(slug).and(alice.page.locator("[aria-current=page]")).waitFor({ timeout: 15000 });
+  assert.equal(await alice.page.getByRole("dialog").count(), 0, "the switcher closes once a channel is picked");
+  console.log("· Ctrl+K jumps between channels by name");
+}
+
 // Alice (owner) removes bob from the member list; bob's console notices.
 await alice.page.getByRole("button", { name: "Members" }).click();
 bob.removed = true;

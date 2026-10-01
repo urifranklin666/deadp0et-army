@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { AlertTriangle, ArrowDown, Hash, Info, Lock, Pencil, Reply, SmilePlus, Trash2, ChevronLeft, MessageSquare, PenLine, RefreshCw, Search, Send, ShieldCheck, UserPlus, Users, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, Check, Copy, Hash, Info, Lock, Pencil, Reply, SmilePlus, Trash2, ChevronLeft, MessageSquare, PenLine, RefreshCw, Search, Send, ShieldCheck, UserPlus, Users, X } from "lucide-react";
 import Canvas from "./Canvas.jsx";
 import { api } from "./lib/api.js";
 import { Presence } from "./lib/presence.js";
@@ -413,6 +413,18 @@ export default function Conversation({ session, onError, onChange, openModal, on
 
   const invite = () => openModal({ kind: "invite", session });
 
+  // Copy a message's text (as typed, formatting marks and all).
+  const [copied, setCopied] = useState(null);
+  useEffect(() => {
+    if (copied === null) return undefined;
+    const t = setTimeout(() => setCopied(null), 1500);
+    return () => clearTimeout(t);
+  }, [copied]);
+  const copy = async (m) => {
+    try { await navigator.clipboard.writeText(m.text); setCopied(m.seq); }
+    catch { onError("Couldn't copy: this browser didn't allow access to the clipboard."); }
+  };
+
   const remove = async (seq) => {
     if (confirmDelete !== seq) { setConfirmDelete(seq); return; }
     setConfirmDelete(null);
@@ -621,6 +633,10 @@ export default function Conversation({ session, onError, onChange, openModal, on
                             <button onClick={() => startReply(m)} aria-label="Reply" title="Reply"
                               className="rounded-md p-1.5 text-slate-400 transition hover:bg-white/[0.08] hover:text-white">
                               <Reply className="h-3.5 w-3.5" />
+                            </button>
+                            <button onClick={() => copy(m)} aria-label={copied === m.seq ? "Copied" : "Copy text"} title="Copy text"
+                              className={`rounded-md p-1.5 transition hover:bg-white/[0.08] ${copied === m.seq ? "text-emerald-400" : "text-slate-400 hover:text-white"}`}>
+                              {copied === m.seq ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
                             </button>
                             {m.mine ? (
                               <button onClick={() => startEdit(m)} aria-label="Edit message" title="Edit for everyone"
