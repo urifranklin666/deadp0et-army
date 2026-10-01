@@ -177,6 +177,7 @@ export class GroupSession {
     this.client = null;
     this.cursor = 0;
     this.history = [];
+    this.draft = "";          // unsent composer text; see saveDraft
 
     // Shared canvas state. Yjs is a CRDT, so updates are commutative and
     // idempotent — out-of-order or duplicated delivery converges anyway,
@@ -337,6 +338,7 @@ export class GroupSession {
       if (!state) return false;              // known group, but not joined on this device
       this.cursor = (await store.get(K.cursor(this.handle, groupIdB64))) || 0;
       await this.#loadHistory();
+      this.draft = (await store.get(K.draft(this.handle, groupIdB64))) || "";
       this.client = await MlsClient.restore(this.handle, { keyPackage: kp, state });
       try {
         await this.#settlePendingCommit();
@@ -556,6 +558,21 @@ export class GroupSession {
     return seq;
   }
 
+  /**
+   * Keep the composer's unsent text, so switching channels or reloading
+   * doesn't lose it. Stored beside the transcript — both are plaintext
+   * this device already holds — and written a moment after typing pauses.
+   */
+  saveDraft(text) {
+    this.draft = text;
+    clearTimeout(this.draftTimer);
+    if (!this.groupId) return;
+    const key = K.draft(this.handle, this.groupId);
+    this.draftTimer = setTimeout(() => {
+      (text ? store.set(key, text) : store.del(key)).catch(() => {});
+    }, 250);
+  }
+
   /** Hand a late joiner the whole board in one message. */
   sendCanvasSnapshot() { return this.#exclusive(() => this.#sendCanvasSnapshot()); }
 
@@ -767,7 +784,9 @@ export class GroupSession {
     this.removed = true;
     this.client = null;
     this.cursor = 0;
-    await store.delMany([K.groupState, K.cursor, K.history, K.ydoc, K.pendingCommit]
+    clearTimeout(this.draftTimer);
+    this.draft = "";
+    await store.delMany([K.groupState, K.cursor, K.history, K.ydoc, K.pendingCommit, K.draft]
       .map((key) => key(this.handle, this.groupId))
       .concat(this.#savedChunks.map((_, i) => K.historyChunk(this.handle, this.groupId, i))));
     this.#savedChunks = [];

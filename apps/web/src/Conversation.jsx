@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { AlertTriangle, Hash, ChevronLeft, MessageSquare, PenLine, RefreshCw, Search, Send, Shield, UserPlus, Users, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, Hash, ChevronLeft, MessageSquare, PenLine, RefreshCw, Search, Send, Shield, UserPlus, Users, X } from "lucide-react";
 import Canvas from "./Canvas.jsx";
 import { api } from "./lib/api.js";
 import { Presence } from "./lib/presence.js";
@@ -147,7 +147,8 @@ function Highlight({ text, q }) {
 }
 
 export default function Conversation({ session, onError, onChange, openModal, onBack }) {
-  const [draft, setDraft] = useState("");
+  const [draft, setDraftState] = useState(() => session.draft || "");
+  const setDraft = (text) => { setDraftState(text); session.saveDraft(text); };
   const [busy, setBusy] = useState(null);
   const [mode, setMode] = useState(session.channel.kind === "canvas" ? "canvas" : "chat");
   const endRef = useRef(null);
@@ -165,7 +166,27 @@ export default function Conversation({ session, onError, onChange, openModal, on
   const visible = hidden ? source.slice(hidden) : source;
   const closeSearch = () => { setSearching(false); setQuery(""); setShown(PAGE); };
 
-  useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [session.history.length, q]);
+  // Follow new messages only while the reader is at the bottom (or the new
+  // message is their own). Someone reading back through history isn't
+  // yanked down by every arrival; they get a "new messages" button instead.
+  const scrollRef = useRef(null);
+  const atBottom = useRef(true);
+  const seenLen = useRef(session.history.length);
+  const [unseen, setUnseen] = useState(0);
+  const toEnd = () => { endRef.current?.scrollIntoView({ block: "end" }); setUnseen(0); };
+  const onScroll = () => {
+    const el = scrollRef.current;
+    atBottom.current = !el || el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    if (atBottom.current) setUnseen(0);
+  };
+  useEffect(() => {
+    const len = session.history.length;
+    const added = len - seenLen.current;
+    seenLen.current = len;
+    if (atBottom.current || added <= 0 || session.history[len - 1]?.mine) toEnd();
+    else setUnseen((n) => n + added);
+  }, [session.history.length, session.history]);
+  useEffect(() => { toEnd(); }, [q]);
 
   // A removed session keeps its transcript readable but can no longer act.
   const joined = !!session.client && !session.removed;
@@ -263,7 +284,9 @@ export default function Conversation({ session, onError, onChange, openModal, on
           </button>
         </div>
       ) : null}
-      <div className="dp-scroll min-h-0 flex-1 overflow-y-auto px-4 py-4">
+      <div className="relative flex min-h-0 flex-1 flex-col">
+      <div ref={scrollRef} onScroll={onScroll} role="log" aria-label="Messages"
+        className="dp-scroll min-h-0 flex-1 overflow-y-auto px-4 py-4">
         {!session.client && !session.removed ? (
           <p className="mx-auto max-w-sm text-center text-[11px] leading-relaxed text-slate-600">
             This device isn't a member yet. Once someone invites you, the Welcome arrives on the
@@ -338,6 +361,14 @@ export default function Conversation({ session, onError, onChange, openModal, on
           </ul>
         )}
         <div ref={endRef} />
+      </div>
+      {unseen > 0 ? (
+        <button onClick={toEnd}
+          className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-white/10
+            bg-rose-600 px-3 py-1 text-[11px] font-medium text-white shadow-lg hover:bg-rose-500">
+          <ArrowDown className="h-3 w-3" />{unseen} new message{unseen === 1 ? "" : "s"}
+        </button>
+      ) : null}
       </div>
 
       <div className="shrink-0 border-t border-white/10 p-3">

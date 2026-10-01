@@ -167,11 +167,20 @@ await tab2.getByText("Open in another tab").waitFor({ timeout: 30000 });
 await tab2.close();
 console.log("· a second tab stands down instead of sharing the keys");
 
+// An unsent draft is kept across the reload below.
+const DRAFT = "unsent thought " + rnd();
+await alice.page.getByPlaceholder(/Encrypted before it leaves/).fill(DRAFT);
+await alice.page.waitForTimeout(600);                 // the draft is saved once typing pauses
+
 // THE persistence check: reload and confirm decrypted history is still there.
 await alice.page.reload({ waitUntil: "networkidle" });
 await alice.page.getByText(slug, { exact: true }).first().click();
 await alice.page.getByText(MSG).waitFor({ timeout: 60000 });
 console.log("· history survived a full reload (IndexedDB state restored)");
+assert.equal(await alice.page.getByPlaceholder(/Encrypted before it leaves/).inputValue(), DRAFT,
+  "an unsent draft survives a reload");
+await alice.page.getByPlaceholder(/Encrypted before it leaves/).fill("");
+console.log("· the unsent draft survived it too");
 
 // A second identity must not see the group at all until invited.
 const bob = await newUser(browser, "web_b_" + rnd());

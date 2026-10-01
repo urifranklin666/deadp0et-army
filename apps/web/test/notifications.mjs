@@ -109,6 +109,25 @@ for (const n of notes) {
 }
 console.log("· activity elsewhere notified by channel only; no notification carried message text");
 
+// Reading back through history isn't interrupted: with bob scrolled up, a
+// new message leaves his place alone and offers a button to jump down.
+await alice.page.getByText(main, { exact: true }).click();
+await alice.page.getByPlaceholder(/Encrypted before it leaves/).waitFor({ timeout: 30000 });
+await bob.page.setViewportSize({ width: 900, height: 420 });
+for (let i = 0; i < 12; i++) await say(alice, `filler ${i} ${rnd()}`);
+const scroller = bob.page.getByRole("log", { name: "Messages" });
+await bob.page.getByText(/^filler 11 /).waitFor({ timeout: 30000 });
+await scroller.evaluate((el) => { el.scrollTop = 0; el.dispatchEvent(new Event("scroll")); });
+await say(alice, "while bob reads back " + rnd());
+const jump = bob.page.getByRole("button", { name: /^\d+ new messages?$/ });
+await jump.waitFor({ timeout: 30000 });
+assert.equal(await scroller.evaluate((el) => el.scrollTop), 0, "bob's reading position is left alone");
+await jump.click();
+await jump.waitFor({ state: "detached", timeout: 10000 });
+assert.ok(await scroller.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight < 80),
+  "the button takes him to the latest message");
+console.log("· a new message doesn't yank a reader who scrolled up; a button takes them down");
+
 const errors = [...alice.errors, ...bob.errors];
 if (errors.length) {
   console.log("\nPAGE ERRORS:\n  " + errors.join("\n  "));
