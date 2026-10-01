@@ -279,6 +279,7 @@ export default function Conversation({ session, onError, onChange, openModal, on
     if (!editing) setAside.current = draft;
     setEditing(m);
     setDraftState(m.text);
+    caretAfterRender.current = m.text.length;
     composer.current?.focus();
   };
   const stopEditing = () => { setEditing(null); setDraftState(setAside.current); };
@@ -320,6 +321,23 @@ export default function Conversation({ session, onError, onChange, openModal, on
     else setUnseen((n) => n + added);
   }, [session.history.length, session.history]);
   useEffect(() => { toEnd(); }, [q]);
+
+  // Clicking a reply's quote brings the quoted message into view and
+  // flashes it, loading earlier history (and leaving search) if need be.
+  const [flash, setFlash] = useState(null);
+  const jumpTo = (seq) => {
+    const at = session.history.findIndex((h) => h.seq === seq && (h.text !== undefined || h.deleted));
+    if (at === -1) return;
+    if (searching) { setSearching(false); setQuery(""); }
+    setShown((n) => Math.max(n, PAGE, session.history.length - at));
+    setFlash({ seq, n: Date.now() });     // a fresh object re-runs the effect on a repeat click
+  };
+  useEffect(() => {
+    if (!flash) return undefined;
+    scrollRef.current?.querySelector(`[data-seq="${flash.seq}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+    const t = setTimeout(() => setFlash(null), 1600);
+    return () => clearTimeout(t);
+  }, [flash]);
 
   // A removed session keeps its transcript readable but can no longer act.
   const joined = !!session.client && !session.removed;
@@ -483,7 +501,9 @@ export default function Conversation({ session, onError, onChange, openModal, on
                 </li>
               ) : null}
               {/* seq alone isn't unique: notices reuse the seq of the message they follow. */}
-              <li className={`${grouped ? "mt-0.5" : i === 0 ? "" : "mt-3"} animate-[dp-rise_0.25s_ease-out_both]`}>
+              <li data-seq={m.text !== undefined || m.deleted ? m.seq : undefined}
+                data-flash={flash && !m.notice && !m.audit && !m.error && flash.seq === m.seq ? "" : undefined}
+                className={`${grouped ? "mt-0.5" : i === 0 ? "" : "mt-3"} animate-[dp-rise_0.25s_ease-out_both]`}>
                 {m.audit ? (
                   <SystemLine tone="amber" icon={AlertTriangle}>
                     {m.from || "someone"}{m.claimed ? ` (claiming to be ${m.claimed})` : ""} removed {m.audit.removed.join(", ")} from the group
@@ -524,13 +544,15 @@ export default function Conversation({ session, onError, onChange, openModal, on
                             : `border border-white/[0.07] bg-ink-800 text-slate-100 ${grouped ? "rounded-tl-md" : ""}`}`}>
                           {m.re !== undefined ? (() => {
                             const t = quoted(m.re);
+                            const skin = `mb-1.5 block w-full rounded-lg border-l-2 px-2 py-1 text-left text-xs
+                              ${m.mine ? "border-white/60 bg-black/15 text-rose-50/90" : "border-rose-400/60 bg-white/[0.04] text-slate-400"}`;
+                            if (!t) return <p className={skin}>A message not on this device</p>;
                             return (
-                              <p className={`mb-1.5 rounded-lg border-l-2 px-2 py-1 text-xs
-                                ${m.mine ? "border-white/60 bg-black/15 text-rose-50/90" : "border-rose-400/60 bg-white/[0.04] text-slate-400"}`}>
-                                {!t ? "A message not on this device"
-                                  : t.deleted ? "A deleted message"
+                              <button onClick={() => jumpTo(m.re)} title="Go to the message" aria-label={`Go to the quoted message${t.deleted ? "" : `: ${snippet(t.text)}`}`}
+                                className={`${skin} transition ${m.mine ? "hover:bg-black/25" : "hover:bg-white/[0.08]"}`}>
+                                {t.deleted ? "A deleted message"
                                   : <><span className="font-semibold">{t.mine ? "You" : t.from || "someone"}</span>: {snippet(t.text)}</>}
-                              </p>
+                              </button>
                             );
                           })() : null}
                           <div className="whitespace-pre-wrap break-words">
@@ -689,6 +711,11 @@ export default function Conversation({ session, onError, onChange, openModal, on
                 if (e.key === "Escape") { e.preventDefault(); setMentionOff(true); return; }
               }
               if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+              // Up in an empty composer edits your last message, as in most chat apps.
+              if (e.key === "ArrowUp" && !draft && !editing && joined) {
+                const last = session.history.findLast((h) => h.mine && h.text !== undefined && !h.deleted);
+                if (last) { e.preventDefault(); startEdit(last); }
+              }
               if (e.key === "Escape") { if (editing) stopEditing(); else setReplyTo(null); }
             }}
             placeholder={joined
@@ -705,7 +732,7 @@ export default function Conversation({ session, onError, onChange, openModal, on
         </div>
         </div>
         <p className="mt-1.5 hidden items-center justify-center gap-1 text-[10px] text-slate-600 sm:flex">
-          <Lock className="h-2.5 w-2.5" /> End-to-end encrypted with MLS · Enter to send, Shift+Enter for a new line
+          <Lock className="h-2.5 w-2.5" /> End-to-end encrypted with MLS · Enter to send, Shift+Enter for a new line, ↑ to edit your last
         </p>
         </div>
       </div>

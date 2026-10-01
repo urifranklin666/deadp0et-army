@@ -273,6 +273,23 @@ await answerOnBob.waitFor({ timeout: 30000 });
 assert.ok((await answerOnBob.innerText()).includes(REPLY), "bob sees which message alice answered");
 console.log("· alice replied to bob's message; bob sees it quoted");
 
+// Clicking the quote takes bob to the message it answers, which flashes.
+await answerOnBob.getByRole("button", { name: /^Go to the quoted message/ }).click();
+await bob.page.locator("li[data-flash]", { hasText: REPLY }).waitFor({ timeout: 5000 });
+console.log("· clicking a quote jumps to the quoted message");
+
+// Up in an empty composer edits your last message; Escape backs out.
+{
+  const mine = alice.page.getByPlaceholder(/Encrypted before it leaves/);
+  await mine.click();
+  await mine.press("ArrowUp");
+  await alice.page.getByText("Editing your message").waitFor({ timeout: 5000 });
+  assert.equal(await mine.inputValue(), ANSWER, "↑ loads alice's last message for editing");
+  await mine.press("Escape");
+  assert.equal(await mine.inputValue(), "", "Escape leaves the composer as it was");
+  console.log("· ↑ in an empty composer edits your last message");
+}
+
 const EDITED = REPLY + " (revised)";
 await bob.page.getByRole("button", { name: "Edit message" }).last().click();
 const box = bob.page.getByPlaceholder(/Encrypted before it leaves/);
