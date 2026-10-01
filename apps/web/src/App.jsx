@@ -244,6 +244,7 @@ function App() {
       inFlight = true;
       last = Date.now();
       try {
+        const before = active.cursor;
         const { applied, removed } = await active.sync();
         if (dead) return;
         if (removed) {
@@ -258,7 +259,9 @@ function App() {
           bump();
           // New messages from others, while the tab is in the background:
           // who and where, never what.
-          const fresh = active.history.slice(-applied).filter((m) => m.text !== undefined && !m.mine);
+          // What this sync added (not every applied entry is a message: canvas
+          // ops and deletions add none, so "the last N" would misreport).
+          const fresh = active.history.filter((m) => m.seq > before && m.text !== undefined && !m.mine);
           const last = fresh[fresh.length - 1];
           if (last) {
             notify(`ch:${active.channel.id}`, `#${active.channel.slug}`,

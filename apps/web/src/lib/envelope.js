@@ -14,6 +14,7 @@ export const T = {
   Y_UPDATE: "y",  // { t:'y', u: base64(Yjs update) }
   Y_SNAPSHOT: "s",// { t:'s', u: base64(full Yjs state) } — for members who joined late
   Y_REQUEST: "r", // { t:'r' } — "I have a gap, someone publish the board"
+  DELETE: "d",    // { t:'d', s: seq } — the sender withdraws their own chat message
 };
 
 export function encodeEnvelope(obj) {

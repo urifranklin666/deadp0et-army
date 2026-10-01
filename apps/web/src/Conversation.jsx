@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { AlertTriangle, ArrowDown, Hash, ChevronLeft, MessageSquare, PenLine, RefreshCw, Search, Send, Shield, UserPlus, Users, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, Hash, Trash2, ChevronLeft, MessageSquare, PenLine, RefreshCw, Search, Send, Shield, UserPlus, Users, X } from "lucide-react";
 import Canvas from "./Canvas.jsx";
 import { api } from "./lib/api.js";
 import { Presence } from "./lib/presence.js";
@@ -121,6 +121,20 @@ const PAGE = 200;
 const matches = (m, q) => m.text !== undefined
   && (m.text.toLowerCase().includes(q) || (m.from || "").toLowerCase().includes(q));
 
+/** "Today", "Yesterday", or the date, for a day separator. */
+function dayLabel(at) {
+  const d = new Date(at);
+  const today = new Date();
+  const days = Math.round((new Date(today.toDateString()) - new Date(d.toDateString())) / 86_400_000);
+  if (days === 0) return "Today";
+  if (days === 1) return "Yesterday";
+  return d.toLocaleDateString(undefined, {
+    weekday: "short", month: "short", day: "numeric",
+    ...(d.getFullYear() !== today.getFullYear() ? { year: "numeric" } : {}),
+  });
+}
+const dayOf = (m) => (m.at ? new Date(m.at).toDateString() : null);
+
 /** "alice is typing…", "alice and bob are typing…", "4 people are typing…" */
 function typingLine(handles) {
   if (!handles.length) return "";
@@ -147,6 +161,7 @@ function Highlight({ text, q }) {
 }
 
 export default function Conversation({ session, onError, onChange, openModal, onBack }) {
+  const [confirmDelete, setConfirmDelete] = useState(null);    // seq awaiting a second click
   const [draft, setDraftState] = useState(() => session.draft || "");
   const setDraft = (text) => { setDraftState(text); session.saveDraft(text); };
   const [busy, setBusy] = useState(null);
@@ -221,6 +236,13 @@ export default function Conversation({ session, onError, onChange, openModal, on
   };
 
   const invite = () => openModal({ kind: "invite", session });
+
+  const remove = async (seq) => {
+    if (confirmDelete !== seq) { setConfirmDelete(seq); return; }
+    setConfirmDelete(null);
+    try { await session.deleteMessage(seq); onChange(); }
+    catch (e) { onError(e.message); }
+  };
 
   return (
     <>
@@ -312,11 +334,21 @@ export default function Conversation({ session, onError, onChange, openModal, on
               </li>
             ) : null}
             {visible.map((m, i) => (
-              // seq alone isn't unique: notices reuse the seq of the message
-              // they follow.
-              <li key={`${m.seq}:${m.notice ? "n" : m.audit ? "a" : m.error ? "e" : "m"}:${hidden + i}`}
-                className="animate-[dp-rise_0.25s_ease-out_both]">
-                {m.audit ? (
+              <React.Fragment key={`${m.seq}:${m.notice ? "n" : m.audit ? "a" : m.error ? "e" : "m"}:${hidden + i}`}>
+              {dayOf(m) && dayOf(m) !== dayOf(visible[i - 1] || {}) ? (
+                <li role="separator" className="flex items-center gap-3 py-1 text-[10px] uppercase tracking-wider text-slate-600">
+                  <span className="h-px flex-1 bg-white/10" />{dayLabel(m.at)}<span className="h-px flex-1 bg-white/10" />
+                </li>
+              ) : null}
+              {/* seq alone isn't unique: notices reuse the seq of the message they follow. */}
+              <li className="animate-[dp-rise_0.25s_ease-out_both]">
+                {m.deleted ? (
+                  <div className={`flex ${m.mine ? "justify-end" : "justify-start"}`}>
+                    <p className="rounded-xl border border-dashed border-white/10 px-3 py-1.5 text-[11px] italic text-slate-500">
+                      {m.mine ? "You deleted this message" : `${m.from || "Someone"} deleted this message`}
+                    </p>
+                  </div>
+                ) : m.audit ? (
                   <div className="flex items-start gap-2 rounded-lg border border-amber-500/25 bg-amber-950/20 px-3 py-2 text-[11px] text-amber-200">
                     <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
                     <span>
@@ -349,14 +381,24 @@ export default function Conversation({ session, onError, onChange, openModal, on
                         </p>
                       ) : null}
                       <p className="whitespace-pre-wrap break-words"><Highlight text={m.text} q={q} /></p>
-                      <p className="mt-1 font-mono text-[9px] text-slate-500">
+                      <p className="mt-1 flex items-center gap-1 font-mono text-[9px] text-slate-500">
                         {m.at ? <time dateTime={m.at} title={new Date(m.at).toLocaleString()}>{fmtTime(m.at)}</time> : null}
                         {m.at ? " · " : null}#{m.seq}
+                        {m.mine && joined ? (
+                          <button onClick={() => remove(m.seq)} onBlur={() => setConfirmDelete(null)}
+                            title="Delete for everyone. Members' clients replace it; a modified client could keep a copy."
+                            aria-label={confirmDelete === m.seq ? "Confirm delete for everyone" : "Delete message"}
+                            className={`ml-1 flex items-center gap-1 rounded px-1 ${confirmDelete === m.seq
+                              ? "bg-rose-600/40 text-rose-100" : "text-slate-500 hover:text-rose-300"}`}>
+                            <Trash2 className="h-2.5 w-2.5" />{confirmDelete === m.seq ? "Delete for everyone?" : null}
+                          </button>
+                        ) : null}
                       </p>
                     </div>
                   </div>
                 )}
               </li>
+              </React.Fragment>
             ))}
           </ul>
         )}
