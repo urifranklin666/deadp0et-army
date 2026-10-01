@@ -17,13 +17,18 @@ const KEEP_TAIL = 50;
 
 export async function compactGroup(groupId) {
   return tx(async (c) => {
+    // Only devices whose owner is still a member count. A removed member's
+    // frozen cursor would otherwise pin the log for STALE_DEVICE_DAYS.
     const { rows: bound } = await c.query(
       `SELECT
-         COALESCE(MIN(last_seq), 0) AS horizon,
-         count(*)::int              AS active_devices
-       FROM mls_device_cursors
-       WHERE group_id = $1
-         AND updated_at > now() - ($2 || ' days')::interval`,
+         COALESCE(MIN(cur.last_seq), 0) AS horizon,
+         count(*)::int                  AS active_devices
+       FROM mls_device_cursors cur
+       JOIN devices d          ON d.id = cur.device_id
+       JOIN mls_groups g       ON g.group_id = cur.group_id
+       JOIN channel_members cm ON cm.channel_id = g.channel_id AND cm.user_id = d.user_id
+       WHERE cur.group_id = $1
+         AND cur.updated_at > now() - ($2 || ' days')::interval`,
       [groupId, STALE_DEVICE_DAYS]
     );
 
