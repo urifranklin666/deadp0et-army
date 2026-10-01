@@ -3,6 +3,7 @@ import { AlertTriangle, ArrowDown, Hash, Info, Lock, Pencil, Reply, Trash2, Chev
 import Canvas from "./Canvas.jsx";
 import { api } from "./lib/api.js";
 import { Presence } from "./lib/presence.js";
+import { groupsWith } from "./lib/transcript.js";
 import { Avatar, Button, fmtTime } from "./ui.jsx";
 
 export function EmptyState() {
@@ -417,10 +418,9 @@ export default function Conversation({ session, onError, onChange, openModal, on
             {visible.map((m, i) => {
               const prev = visible[i - 1];
               const newDay = dayOf(m) && dayOf(m) !== dayOf(prev || {});
-              // Consecutive messages from one sender, close in time, read as one block.
-              const chat = (e) => e && (e.text !== undefined || e.deleted);
-              const grouped = !newDay && chat(m) && chat(prev) && !!prev.mine === !!m.mine && prev.from === m.from
-                && m.at && prev.at && new Date(m.at) - new Date(prev.at) < 5 * 60_000;
+              // Consecutive messages from one signing key, close in time, read as
+              // one block; anything with a trust warning keeps its own sender line.
+              const grouped = !newDay && groupsWith(prev, m);
               return (
               <React.Fragment key={`${m.seq}:${m.notice ? "n" : m.audit ? "a" : m.error ? "e" : "m"}:${hidden + i}`}>
               {newDay ? (
