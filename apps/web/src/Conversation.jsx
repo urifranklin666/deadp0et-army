@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { AlertTriangle, ArrowDown, Hash, Trash2, ChevronLeft, MessageSquare, PenLine, RefreshCw, Search, Send, Shield, UserPlus, Users, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, Hash, Pencil, Reply, Trash2, ChevronLeft, MessageSquare, PenLine, RefreshCw, Search, Send, Shield, UserPlus, Users, X } from "lucide-react";
 import Canvas from "./Canvas.jsx";
 import { api } from "./lib/api.js";
 import { Presence } from "./lib/presence.js";
@@ -163,7 +163,22 @@ function Highlight({ text, q }) {
 export default function Conversation({ session, onError, onChange, openModal, onBack }) {
   const [confirmDelete, setConfirmDelete] = useState(null);    // seq awaiting a second click
   const [draft, setDraftState] = useState(() => session.draft || "");
-  const setDraft = (text) => { setDraftState(text); session.saveDraft(text); };
+  // Replying to, or editing, one message. While editing, the composer holds
+  // that message's text and the saved draft is set aside until it's done.
+  const [replyTo, setReplyTo] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const setAside = useRef("");
+  const composer = useRef(null);
+  const setDraft = (text) => { setDraftState(text); if (!editing) session.saveDraft(text); };
+  const startReply = (m) => { if (editing) stopEditing(); setReplyTo(m); composer.current?.focus(); };
+  const startEdit = (m) => {
+    setReplyTo(null);
+    if (!editing) setAside.current = draft;
+    setEditing(m);
+    setDraftState(m.text);
+    composer.current?.focus();
+  };
+  const stopEditing = () => { setEditing(null); setDraftState(setAside.current); };
   const [busy, setBusy] = useState(null);
   const [mode, setMode] = useState(session.channel.kind === "canvas" ? "canvas" : "chat");
   const endRef = useRef(null);
@@ -228,12 +243,26 @@ export default function Conversation({ session, onError, onChange, openModal, on
     const text = draft.trim();
     if (!text || !joined) return;
     setBusy("send");
-    setDraft("");
     presence.current?.typing(false);
-    try { await session.send(text); onChange(); }
-    catch (e) { onError(e.message); setDraft(text); }
+    if (editing) {
+      try { await session.editMessage(editing.seq, text); stopEditing(); onChange(); }
+      catch (e) { onError(e.message); }
+      finally { setBusy(null); }
+      return;
+    }
+    const answering = replyTo;
+    setDraft("");
+    setReplyTo(null);
+    try { await session.send(text, answering?.seq); onChange(); }
+    catch (e) { onError(e.message); setDraft(text); setReplyTo(answering); }
     finally { setBusy(null); }
   };
+
+  // Messages by seq, for reply quotes; built only if something on screen quotes.
+  let bySeq = null;
+  const quoted = (seq) => (bySeq ??= new Map(session.history
+    .filter((h) => h.text !== undefined || h.deleted).map((h) => [h.seq, h]))).get(seq);
+  const snippet = (t) => (t.length > 80 ? t.slice(0, 80) + "…" : t);
 
   const invite = () => openModal({ kind: "invite", session });
 
@@ -380,10 +409,33 @@ export default function Conversation({ session, onError, onChange, openModal, on
                           ) : null}
                         </p>
                       ) : null}
+                      {m.re !== undefined ? (() => {
+                        const t = quoted(m.re);
+                        return (
+                          <p className="mb-1 border-l-2 border-white/20 pl-2 text-[11px] text-slate-400">
+                            {!t ? "A message not on this device"
+                              : t.deleted ? "A deleted message"
+                              : <><span className="font-mono">{t.mine ? "You" : t.from || "someone"}</span>: {snippet(t.text)}</>}
+                          </p>
+                        );
+                      })() : null}
                       <p className="whitespace-pre-wrap break-words"><Highlight text={m.text} q={q} /></p>
                       <p className="mt-1 flex items-center gap-1 font-mono text-[9px] text-slate-500">
                         {m.at ? <time dateTime={m.at} title={new Date(m.at).toLocaleString()}>{fmtTime(m.at)}</time> : null}
                         {m.at ? " · " : null}#{m.seq}
+                        {m.edited ? <span title="Edited by its author">(edited)</span> : null}
+                        {joined ? (
+                          <button onClick={() => startReply(m)} aria-label="Reply" title="Reply"
+                            className="ml-1 rounded px-0.5 text-slate-500 hover:text-white">
+                            <Reply className="h-2.5 w-2.5" />
+                          </button>
+                        ) : null}
+                        {m.mine && joined ? (
+                          <button onClick={() => startEdit(m)} aria-label="Edit message" title="Edit for everyone"
+                            className="rounded px-0.5 text-slate-500 hover:text-white">
+                            <Pencil className="h-2.5 w-2.5" />
+                          </button>
+                        ) : null}
                         {m.mine && joined ? (
                           <button onClick={() => remove(m.seq)} onBlur={() => setConfirmDelete(null)}
                             title="Delete for everyone. Members' clients replace it; a modified client could keep a copy."
@@ -417,13 +469,29 @@ export default function Conversation({ session, onError, onChange, openModal, on
         <p aria-live="polite" className="-mt-1 mb-1 h-4 truncate font-mono text-[10px] text-slate-500">
           {typingLine(typers)}
         </p>
+        {replyTo || editing ? (
+          <div className="mb-2 flex items-center gap-2 rounded-md border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] text-slate-400">
+            {editing ? <Pencil className="h-3 w-3 shrink-0" /> : <Reply className="h-3 w-3 shrink-0" />}
+            <span className="min-w-0 flex-1 truncate">
+              {editing ? "Editing your message" : <>Replying to <span className="font-mono">{replyTo.mine ? "yourself" : replyTo.from || "someone"}</span>: {snippet(replyTo.text || "")}</>}
+            </span>
+            <button onClick={() => (editing ? stopEditing() : setReplyTo(null))}
+              aria-label={editing ? "Cancel editing" : "Cancel reply"} className="rounded p-0.5 hover:bg-white/10 hover:text-white">
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        ) : null}
         <div className="flex items-end gap-2">
           <textarea
+            ref={composer}
             rows={1}
             value={draft}
             disabled={!joined}
             onChange={(e) => { setDraft(e.target.value); presence.current?.typing(!!e.target.value.trim()); }}
-            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+              if (e.key === "Escape") { if (editing) stopEditing(); else setReplyTo(null); }
+            }}
             placeholder={joined
               // The full line wraps (and clips) in a one-row box on a phone.
               ? (window.matchMedia?.("(max-width: 639px)").matches ? "Encrypted before it leaves…" : "Encrypted before it leaves this tab…")
@@ -433,7 +501,7 @@ export default function Conversation({ session, onError, onChange, openModal, on
               focus:border-rose-500/60 disabled:opacity-50"
           />
           <Button icon={Send} busy={busy === "send"} disabled={!joined || !draft.trim()} onClick={send}>
-            Send
+            {editing ? "Save" : "Send"}
           </Button>
         </div>
       </div>

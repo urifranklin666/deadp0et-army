@@ -505,19 +505,24 @@ export class GroupSession {
             // Someone lost state to compaction. Answer with the board, but
             // stagger so a large group doesn't publish N identical snapshots.
             if (m.senderDeviceId !== this.deviceId) this.#answerSnapshotRequest();
-          } else if (env.t === T.DELETE) {
+          } else if (env.t === T.DELETE || env.t === T.EDIT) {
             // Honoured only for a message signed by the same key: nobody can
-            // withdraw someone else's words. (Nor can an honest client make a
-            // modified one forget; the UI says "for everyone" with that caveat.)
+            // withdraw or rewrite someone else's words. (Nor can an honest
+            // client make a modified one forget; the UI says so.)
             const target = senderKey && Number.isInteger(env.s) && this.history.find(
               (h) => h.seq === env.s && h.key === senderKey && h.text !== undefined);
-            if (target) { delete target.text; target.deleted = true; }
+            if (target && env.t === T.DELETE) { delete target.text; target.deleted = true; }
+            if (target && env.t === T.EDIT && typeof env.b === "string" && env.b.trim()) {
+              target.text = env.b;
+              target.edited = true;
+            }
           } else {
             // Attributed below, by the key that signed it. The key is kept so
             // a later deletion can be checked against it.
             const entry = {
               seq: m.seq, text: env.b, at: m.createdAt, from: sender,
               mine: m.senderDeviceId === this.deviceId, ...(senderKey ? { key: senderKey } : {}),
+              ...(Number.isInteger(env.r) && env.r < m.seq ? { re: env.r } : {}),
             };
             this.history.push(entry);
             if (senderKey) toAttribute.push([entry, senderKey]);
@@ -555,13 +560,15 @@ export class GroupSession {
     return { applied };
   }
 
-  send(text) { return this.#exclusive(() => this.#send(text)); }
+  /** Send a chat message; `replyTo` is the seq of a message it answers. */
+  send(text, replyTo) { return this.#exclusive(() => this.#send(text, replyTo)); }
 
-  async #send(text) {
-    const seq = await this.#sendEnvelope({ t: T.CHAT, b: text });
+  async #send(text, replyTo) {
+    const re = Number.isInteger(replyTo) ? { r: replyTo } : {};
+    const seq = await this.#sendEnvelope({ t: T.CHAT, b: text, ...re });
     // Our own message is never echoed back through apply() — the sender's
     // ratchet has already moved past it — so record it directly.
-    this.history.push({ seq, text, at: new Date().toISOString(), mine: true });
+    this.history.push({ seq, text, at: new Date().toISOString(), mine: true, ...(re.r ? { re: re.r } : {}) });
     await this.#persist();
     return seq;
   }
@@ -588,6 +595,19 @@ export class GroupSession {
    * either way; what this can't do is make a modified client forget.
    */
   deleteMessage(seq) { return this.#exclusive(() => this.#deleteMessage(seq)); }
+
+  /** Replace one of our own chat messages' text, for everyone (same terms as deletion). */
+  editMessage(seq, text) { return this.#exclusive(() => this.#editMessage(seq, text)); }
+
+  async #editMessage(seq, text) {
+    const entry = this.history.find((h) => h.seq === seq && h.mine && h.text !== undefined);
+    if (!entry || !this.client || !text.trim() || text === entry.text) return false;
+    await this.#sendEnvelope({ t: T.EDIT, s: seq, b: text });
+    entry.text = text;
+    entry.edited = true;
+    await this.#persist();
+    return true;
+  }
 
   async #deleteMessage(seq) {
     const entry = this.history.find((h) => h.seq === seq && h.mine && h.text !== undefined);
