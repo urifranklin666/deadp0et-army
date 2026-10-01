@@ -212,6 +212,8 @@ export class GroupSession {
     this.cursor = 0;
     this.history = [];
     this.draft = "";          // unsent composer text; see saveDraft
+    this.readUpTo = null;     // last seq read here, or null if never opened; see markRead
+    this.syncs = 0;           // completed syncs
 
     // Shared canvas state. Yjs is a CRDT, so updates are commutative and
     // idempotent — out-of-order or duplicated delivery converges anyway,
@@ -373,6 +375,7 @@ export class GroupSession {
       this.cursor = (await store.get(K.cursor(this.handle, groupIdB64))) || 0;
       await this.#loadHistory();
       this.draft = (await store.get(K.draft(this.handle, groupIdB64))) || "";
+      this.readUpTo = (await store.get(K.read(this.handle, groupIdB64))) ?? null;
       this.client = await MlsClient.restore(this.handle, { keyPackage: kp, state });
       try {
         await this.#settlePendingCommit();
@@ -460,7 +463,11 @@ export class GroupSession {
   }
 
   /** Pull new log entries and apply them in order. */
-  sync() { return this.#exclusive(() => this.#sync()); }
+  async sync() {
+    const res = await this.#exclusive(() => this.#sync());
+    this.syncs++;             // the UI tells a visit's catch-up from live arrivals by this
+    return res;
+  }
 
   async #sync() {
     if (!this.client) return { applied: 0, removed: !!this.removed };
@@ -626,6 +633,20 @@ export class GroupSession {
     this.draftTimer = setTimeout(() => {
       (text ? store.set(key, text) : store.del(key)).catch(() => {});
     }, 250);
+  }
+
+  /**
+   * Note that the reader has seen the transcript to its end, so the next
+   * visit can mark where the new messages start. Like the draft, it's kept
+   * on this device only and written a moment later.
+   */
+  markRead() {
+    const seq = this.history.at(-1)?.seq;
+    if (seq === undefined || !this.groupId || (this.readUpTo !== null && seq <= this.readUpTo)) return;
+    this.readUpTo = seq;
+    clearTimeout(this.readTimer);
+    const key = K.read(this.handle, this.groupId);
+    this.readTimer = setTimeout(() => { store.set(key, seq).catch(() => {}); }, 250);
   }
 
   /**
@@ -886,8 +907,10 @@ export class GroupSession {
     this.client = null;
     this.cursor = 0;
     clearTimeout(this.draftTimer);
+    clearTimeout(this.readTimer);
     this.draft = "";
-    await store.delMany([K.groupState, K.cursor, K.history, K.ydoc, K.pendingCommit, K.draft]
+    this.readUpTo = null;
+    await store.delMany([K.groupState, K.cursor, K.history, K.ydoc, K.pendingCommit, K.draft, K.read]
       .map((key) => key(this.handle, this.groupId))
       .concat(this.#savedChunks.map((_, i) => K.historyChunk(this.handle, this.groupId, i))));
     this.#savedChunks = [];

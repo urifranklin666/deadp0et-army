@@ -273,6 +273,23 @@ await answerOnBob.waitFor({ timeout: 30000 });
 assert.ok((await answerOnBob.innerText()).includes(REPLY), "bob sees which message alice answered");
 console.log("· alice replied to bob's message; bob sees it quoted");
 
+// Clicking the quote takes bob to the message it answers, which flashes.
+await answerOnBob.getByRole("button", { name: /^Go to the quoted message/ }).click();
+await bob.page.locator("li[data-flash]", { hasText: REPLY }).waitFor({ timeout: 5000 });
+console.log("· clicking a quote jumps to the quoted message");
+
+// Up in an empty composer edits your last message; Escape backs out.
+{
+  const mine = alice.page.getByPlaceholder(/Encrypted before it leaves/);
+  await mine.click();
+  await mine.press("ArrowUp");
+  await alice.page.getByText("Editing your message").waitFor({ timeout: 5000 });
+  assert.equal(await mine.inputValue(), ANSWER, "↑ loads alice's last message for editing");
+  await mine.press("Escape");
+  assert.equal(await mine.inputValue(), "", "Escape leaves the composer as it was");
+  console.log("· ↑ in an empty composer edits your last message");
+}
+
 const EDITED = REPLY + " (revised)";
 await bob.page.getByRole("button", { name: "Edit message" }).last().click();
 const box = bob.page.getByPlaceholder(/Encrypted before it leaves/);
@@ -380,13 +397,31 @@ await alice.page.getByRole("button", { name: "New channel" }).click();
 await alice.page.getByPlaceholder("war-room").fill(slug2);
 await alice.page.getByRole("button", { name: "Create", exact: true }).click();
 await alice.page.getByText(slug2, { exact: true }).first().waitFor({ timeout: 60000 });
-await bob.page.getByPlaceholder(/Encrypted before it leaves/).fill("ping " + rnd());
+const AWAY = "while you were away " + rnd();
+await bob.page.getByPlaceholder(/Encrypted before it leaves/).fill(AWAY);
 await bob.page.getByRole("button", { name: "Send" }).click();
 const room1 = alice.page.getByRole("button", { name: new RegExp(`^${slug}`) });
 await room1.getByLabel("unread").waitFor({ timeout: 15000 });
 await room1.click();
 await room1.getByLabel("unread").waitFor({ state: "detached", timeout: 15000 });
 console.log("· a hint marks a background channel unread; opening it clears the mark");
+
+// The transcript marks where alice stopped reading: the "New" line sits
+// right above bob's message. A message arriving while she watches gets none.
+{
+  const mark = alice.page.getByRole("separator", { name: "New messages" });
+  await mark.waitFor({ timeout: 30000 });
+  const next = await mark.evaluate((el) => el.nextElementSibling?.textContent || "");
+  assert.ok(next.includes(AWAY), `the New line should precede bob's message, got: ${next.slice(0, 80)}`);
+  assert.equal(await mark.count(), 1);
+  const LIVE = "live " + rnd();
+  await bob.page.getByPlaceholder(/Encrypted before it leaves/).fill(LIVE);
+  await bob.page.getByRole("button", { name: "Send" }).click();
+  await alice.page.locator("li", { hasText: LIVE }).waitFor({ timeout: 30000 });
+  const stillBefore = await mark.evaluate((el) => el.nextElementSibling?.textContent || "");
+  assert.ok(stillBefore.includes(AWAY), "the mark stays put while new messages arrive");
+  console.log("· a New line marks where alice stopped reading, and stays put");
+}
 
 // Alice (owner) removes bob from the member list; bob's console notices.
 await alice.page.getByRole("button", { name: "Members" }).click();
