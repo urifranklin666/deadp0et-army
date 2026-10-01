@@ -85,6 +85,30 @@ const pooled = await q(
 assert.ok(pooled.rows[0].n >= 3, "a device should publish a pool of key packages");
 console.log("· devices provisioned; bob has", pooled.rows[0].n, "unclaimed key packages");
 
+// A browser that last ran the 2026-09 client holds { identity, packages } under
+// kp:<handle>. It must sign in, keep its device row, and keep the pooled
+// package a Welcome may already be addressed to.
+const legacy = await seedUser("sess_legacy");
+as(legacy);
+const oldClient = await MlsClient.create(legacy.handle);
+await oldClient.newKeyPackage();
+const oldPkg = oldClient.exportKeyPackage();
+const oldRef = b64(sha256(Buffer.from(unb64(oldPkg.public))));
+const oldIdentity = b64(crypto.randomBytes(32));
+const { deviceId: oldDev } = await api.registerDevice("web", oldIdentity);
+await api.publishKeyPackages(oldDev, SUITE, [{ ref: oldRef, keyPackage: oldPkg.public }]);
+await store.set(K.keyPackage(legacy.handle), { identity: oldIdentity, packages: [{ ...oldPkg, ref: oldRef }] });
+const { deviceId: migratedDev } = await ensureDevice(legacy.handle);
+assert.equal(migratedDev, oldDev, "the migrated device keeps its server row");
+const migratedPrimary = await store.get(K.keyPackage(legacy.handle));
+assert.equal(typeof migratedPrimary.public, "string", "a primary package exists in the new shape");
+assert.equal(migratedPrimary.identity, oldIdentity, "and remembers the identity it registered with");
+const migratedPool = await store.get(K.keyPackagePool(legacy.handle));
+assert.ok(migratedPool[oldRef]?.init, "the pooled package is still openable under the server's ref");
+as(legacy);
+assert.equal((await ensureDevice(legacy.handle)).deviceId, oldDev, "and a reload is stable");
+console.log("· a 2026-09 client's key store migrates in place and keeps its device");
+
 /** Alice founds a channel and brings bob in. Returns both sides' sessions. */
 async function room(slug) {
   as(alice);

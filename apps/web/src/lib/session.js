@@ -64,6 +64,7 @@ async function ownersOf(keys) {
  */
 export async function ensureDevice(handle) {
   let saved = await store.get(K.keyPackage(handle));
+  if (saved && !saved.public && Array.isArray(saved.packages)) saved = await migratePoolRecord(handle, saved);
 
   if (!saved) {
     const client = await MlsClient.create(handle);
@@ -74,11 +75,43 @@ export async function ensureDevice(handle) {
 
   // The MLS credential identity doubles as the device's stable fingerprint,
   // so a reload maps back to the same device row instead of creating another.
-  const { deviceId } = await api.registerDevice("web", saved.public.slice(0, 512));
+  // A record migrated from the 2026-09 client keeps the identity it first
+  // registered with, for the same reason.
+  const identity = saved.identity || saved.public.slice(0, 512);
+  const { deviceId } = await api.registerDevice("web", identity);
   await store.set(K.device(handle), deviceId);
 
   await topUpKeyPackages(handle, deviceId).catch(() => {});
   return { deviceId, keyPackage: saved };
+}
+
+/**
+ * The 2026-09-13 client kept `kp:<handle>` as { identity, packages: [{ public,
+ * init, hpke, sig, ref, legacy? }] }: one random identity for the server's
+ * device row, and every KeyPackage in one list. Split that into this client's
+ * shape — one primary here, the invitable ones under K.keyPackagePool, keyed
+ * by the ref the server already files them under — and keep the identity, so
+ * the device row, its group leaves and its cursors carry over. Without this,
+ * `saved.public` is undefined and sign-in dies at "device setup failed".
+ */
+async function migratePoolRecord(handle, old) {
+  const strip = ({ public: pub, init, hpke, sig }) => ({ public: pub, init, hpke, sig });
+  const pool = {};
+  for (const p of old.packages) if (p.ref && p.public && !p.legacy) pool[p.ref] = strip(p);
+  // Before the pool existed the one package doubled as the identity; a Welcome
+  // may still be addressed to it, so it stays the primary.
+  const legacy = old.packages.find((p) => p.legacy && p.public);
+  let primary;
+  if (legacy) {
+    primary = strip(legacy);
+  } else {
+    const client = await MlsClient.create(handle);
+    await client.newKeyPackage();
+    primary = client.exportKeyPackage();
+  }
+  if (old.identity) primary.identity = old.identity;
+  await store.setMany([[K.keyPackage(handle), primary], [K.keyPackagePool(handle), pool]]);
+  return primary;
 }
 
 /**
