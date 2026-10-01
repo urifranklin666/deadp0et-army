@@ -505,11 +505,19 @@ export class GroupSession {
             // Someone lost state to compaction. Answer with the board, but
             // stagger so a large group doesn't publish N identical snapshots.
             if (m.senderDeviceId !== this.deviceId) this.#answerSnapshotRequest();
+          } else if (env.t === T.DELETE) {
+            // Honoured only for a message signed by the same key: nobody can
+            // withdraw someone else's words. (Nor can an honest client make a
+            // modified one forget; the UI says "for everyone" with that caveat.)
+            const target = senderKey && Number.isInteger(env.s) && this.history.find(
+              (h) => h.seq === env.s && h.key === senderKey && h.text !== undefined);
+            if (target) { delete target.text; target.deleted = true; }
           } else {
-            // Attributed below, by the key that signed it.
+            // Attributed below, by the key that signed it. The key is kept so
+            // a later deletion can be checked against it.
             const entry = {
               seq: m.seq, text: env.b, at: m.createdAt, from: sender,
-              mine: m.senderDeviceId === this.deviceId,
+              mine: m.senderDeviceId === this.deviceId, ...(senderKey ? { key: senderKey } : {}),
             };
             this.history.push(entry);
             if (senderKey) toAttribute.push([entry, senderKey]);
@@ -571,6 +579,24 @@ export class GroupSession {
     this.draftTimer = setTimeout(() => {
       (text ? store.set(key, text) : store.del(key)).catch(() => {});
     }, 250);
+  }
+
+  /**
+   * Withdraw one of our own chat messages for everyone: members' clients
+   * replace it with "message deleted", having checked the deletion is signed
+   * by the key that signed the message. The server holds only ciphertext
+   * either way; what this can't do is make a modified client forget.
+   */
+  deleteMessage(seq) { return this.#exclusive(() => this.#deleteMessage(seq)); }
+
+  async #deleteMessage(seq) {
+    const entry = this.history.find((h) => h.seq === seq && h.mine && h.text !== undefined);
+    if (!entry || !this.client) return false;
+    await this.#sendEnvelope({ t: T.DELETE, s: seq });
+    delete entry.text;
+    entry.deleted = true;
+    await this.#persist();
+    return true;
   }
 
   /** Hand a late joiner the whole board in one message. */

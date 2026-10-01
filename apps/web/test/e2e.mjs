@@ -249,6 +249,16 @@ console.log("· bob replied; alice sees it attributed to", bob.handle, `(${lag}m
   assert.ok(!sentOut.some((r) => r.toLowerCase().includes(needle)), "the search query must never be sent anywhere");
   console.log("· search filters and highlights on-device; the query never leaves the page");
 }
+
+// The transcript is split by day, and bob can withdraw his reply: two clicks,
+// and alice's copy becomes "… deleted this message".
+await alice.page.getByRole("separator").filter({ hasText: "Today" }).first().waitFor({ timeout: 10000 });
+await bob.page.getByRole("button", { name: "Delete message" }).last().click();
+await bob.page.getByRole("button", { name: "Confirm delete for everyone" }).click();
+await bob.page.getByText("You deleted this message").waitFor({ timeout: 30000 });
+await alice.page.getByText(`${bob.handle} deleted this message`).waitFor({ timeout: 30000 });
+assert.equal(await alice.page.getByText(REPLY).count(), 0, "the withdrawn text is gone from alice's transcript");
+console.log("· bob deleted his reply; alice's copy is replaced");
 // The roster lists both members once the epoch has moved.
 await alice.page.getByRole("button", { name: "Members" }).click();
 for (const h of [alice.handle, bob.handle]) {

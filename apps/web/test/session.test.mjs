@@ -44,6 +44,7 @@ const { store, K, belongsTo } = await import("../src/lib/db.js");
 const { MlsClient, SUITE, b64, unb64 } = await import("@deadp0et/crypto/mls");
 
 const { decodeMlsMessage } = await import("ts-mls");
+const { T, encodeEnvelope } = await import("../src/lib/envelope.js");
 
 async function seedUser(handle) {
   await q("DELETE FROM users WHERE handle=$1", [handle]);
@@ -273,6 +274,31 @@ Cs.groupId = A.groupId;
 assert.equal(await Cs.tryJoin(), true, "carol should join from the commit that did land");
 assert.equal(Cs.epoch, A.epoch, "carol and alice agree after a lost response");
 console.log("· lost responses resolved from the log: rolled back if absent, kept if landed");
+
+// ------------------------------------------------------ deleting a message
+
+// Bob can't withdraw alice's words: a deletion only counts when it's signed
+// by the key that signed the message. Alice withdrawing her own does.
+as(alice);
+const words = await A.send("words alice may take back");
+as(bob); await B.sync();
+as(carol); await Cs.sync();
+assert.ok(texts(Cs).includes("words alice may take back"));
+as(bob);
+const forgedDelete = await B.client.encrypt(encodeEnvelope({ t: T.DELETE, s: words }));
+await api.postMessage(B.groupId, { kind: "application", senderDeviceId: bDev, payload: b64(forgedDelete) });
+as(carol); await Cs.sync();
+assert.ok(texts(Cs).includes("words alice may take back"), "a deletion signed by someone else is ignored");
+as(bob); await B.sync();                             // step bob past his own forgery
+as(alice);
+assert.equal(await A.deleteMessage(words), true);
+assert.ok(A.history.find((h) => h.seq === words).deleted, "the author's copy is replaced");
+as(carol); await Cs.sync();
+const gone = Cs.history.find((h) => h.seq === words);
+assert.ok(gone.deleted && gone.text === undefined, "a member's copy is replaced");
+assert.equal(gone.from, alice.handle, "and still says whose it was");
+assert.equal(errors(Cs).length, 0);
+console.log("· a message can be deleted by its author only, checked by signing key");
 
 // ----------------------------------------------------------------- removal
 
