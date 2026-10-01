@@ -12,6 +12,7 @@ import { withReauth } from "./lib/passkeys.js";
 import { Hints } from "./lib/hints.js";
 import { claimTab } from "./lib/tablock.js";
 import { notify, notificationsOn, setNotifications } from "./lib/notifications.js";
+import { mentionsIn } from "./lib/format.jsx";
 
 const SYNC_MS = 2500;
 // While the hint socket is up, the api tells us when to fetch; polling only
@@ -270,7 +271,12 @@ function App() {
           // ops and deletions add none, so "the last N" would misreport).
           const fresh = active.history.filter((m) => m.seq > before && m.text !== undefined && !m.mine);
           const last = fresh[fresh.length - 1];
-          if (last) {
+          const mention = fresh.find((m) => mentionsIn(m.text).has(handle));
+          if (mention) {
+            // Still who and where, never what: the name is the signer's.
+            notify(`ch:${active.channel.id}`, `#${active.channel.slug}`,
+              `${mention.unverified ? "An unverified member" : mention.from || "Someone"} mentioned you`);
+          } else if (last) {
             notify(`ch:${active.channel.id}`, `#${active.channel.slug}`,
               `${fresh.length > 1 ? `${fresh.length} new messages` : "New message"} from ${last.unverified ? "an unverified member" : last.from || "someone"}`);
           }
