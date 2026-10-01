@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AlertTriangle, ArrowDown, Hash, Info, Lock, Pencil, Reply, SmilePlus, Trash2, ChevronLeft, MessageSquare, PenLine, RefreshCw, Search, Send, ShieldCheck, UserPlus, Users, X } from "lucide-react";
 import Canvas from "./Canvas.jsx";
 import { api } from "./lib/api.js";
@@ -256,13 +256,23 @@ export default function Conversation({ session, onError, onChange, openModal, on
   const suggestions = typed && !mentionOff
     ? roster.filter((h) => h !== session.handle && h.startsWith(typed[1].toLowerCase())).slice(0, 6)
     : [];
+  const caretAfterRender = useRef(null);
+  useLayoutEffect(() => {
+    if (caretAfterRender.current === null || !composer.current) return;
+    composer.current.setSelectionRange(caretAfterRender.current, caretAfterRender.current);
+    caretAfterRender.current = null;
+  }, [draft]);
   const completeMention = (handle) => {
     const before = draft.slice(0, caret).replace(/@[a-z0-9_]*$/i, `@${handle} `);
     const next = before + draft.slice(caret);
     setDraft(next);
     setCaret(before.length);
     setPick(0);
-    requestAnimationFrame(() => { composer.current?.focus(); composer.current?.setSelectionRange(before.length, before.length); });
+    // Put the caret after the completed mention as soon as React has written
+    // the new text, before any further keystroke is handled. (Deferring it to
+    // a later frame let fast typing land, then yanked the caret back.)
+    caretAfterRender.current = before.length;
+    composer.current?.focus();
   };
   const startEdit = (m) => {
     setReplyTo(null);

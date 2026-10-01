@@ -317,15 +317,31 @@ console.log("· bob deleted his reply; alice's copy is replaced");
 {
   const box = alice.page.getByPlaceholder(/Encrypted before it leaves/);
   await box.fill("");
+  // A slow machine (CI) is where typing straight after completing a mention
+  // used to race the caret repositioning and scramble the text: emulate one.
+  const slow = await alice.page.context().newCDPSession(alice.page);
+  await slow.send("Emulation.setCPUThrottlingRate", { rate: 6 });
   await box.pressSequentially("@" + bob.handle.slice(0, 4));
   await alice.page.getByRole("option", { name: "@" + bob.handle }).waitFor({ timeout: 10000 });
   await box.press("Tab");
   assert.equal(await box.inputValue(), `@${bob.handle} `, "Tab completes the mention");
   const PING = "look at this " + rnd();
   await box.pressSequentially(PING);
+  assert.equal(await box.inputValue(), `@${bob.handle} ${PING}`, "typing after completing a mention lands in order");
+  await slow.send("Emulation.setCPUThrottlingRate", { rate: 1 });
   await box.press("Enter");
   const pinged = bob.page.locator("li", { hasText: PING });
-  await pinged.waitFor({ timeout: 30000 });
+  try {
+    await pinged.waitFor({ timeout: 30000 });
+  } catch (e) {
+    // This once failed only on CI; say what each side had, so a repeat is diagnosable.
+    const tail = (p) => p.locator('[role="log"] li').evaluateAll((els) => els.slice(-4).map((el) => el.innerText.replace(/\s+/g, " ")));
+    console.log("composer after Enter:", JSON.stringify(await box.inputValue()));
+    console.log("alice banners:", JSON.stringify(await alice.page.locator(".shadow-lift").allInnerTexts().catch(() => [])));
+    console.log("alice tail:", JSON.stringify(await tail(alice.page)));
+    console.log("bob tail:", JSON.stringify(await tail(bob.page)));
+    throw e;
+  }
   assert.equal(await pinged.locator("[data-mentions-me]").count(), 1, "a mention of bob is highlighted for bob");
   console.log("· @mentions are suggested from the roster and highlighted for the person mentioned");
 
