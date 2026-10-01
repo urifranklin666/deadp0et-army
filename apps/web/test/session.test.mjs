@@ -300,6 +300,28 @@ assert.equal(gone.from, alice.handle, "and still says whose it was");
 assert.equal(errors(Cs).length, 0);
 console.log("· a message can be deleted by its author only, checked by signing key");
 
+// Replies point at the message they answer; edits follow the deletion rule.
+as(alice);
+const said = await A.send("first draft of a thought");
+as(bob); await B.sync();
+const answered = await B.send("replying to that", said);
+as(carol); await Cs.sync();
+assert.equal(Cs.history.find((h) => h.seq === answered).re, said, "a reply names the message it answers");
+as(bob);
+const forgedEdit = await B.client.encrypt(encodeEnvelope({ t: T.EDIT, s: said, b: "words put in alice's mouth" }));
+await api.postMessage(B.groupId, { kind: "application", senderDeviceId: bDev, payload: b64(forgedEdit) });
+as(carol); await Cs.sync();
+assert.equal(Cs.history.find((h) => h.seq === said).text, "first draft of a thought", "an edit signed by someone else is ignored");
+as(bob); await B.sync();
+as(alice);
+assert.equal(await A.editMessage(said, "second draft of a thought"), true);
+as(carol); await Cs.sync();
+const revised = Cs.history.find((h) => h.seq === said);
+assert.equal(revised.text, "second draft of a thought", "the author's edit reaches members");
+assert.ok(revised.edited, "and is marked edited");
+assert.equal(errors(Cs).length, 0);
+console.log("· replies carry their reference; edits apply only from the author's key");
+
 // ----------------------------------------------------------------- removal
 
 // Only an owner/admin may remove; a plain member's attempt is refused by the

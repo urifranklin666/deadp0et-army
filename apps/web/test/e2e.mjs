@@ -253,11 +253,34 @@ console.log("· bob replied; alice sees it attributed to", bob.handle, `(${lag}m
 // The transcript is split by day, and bob can withdraw his reply: two clicks,
 // and alice's copy becomes "… deleted this message".
 await alice.page.getByRole("separator").filter({ hasText: "Today" }).first().waitFor({ timeout: 10000 });
+// Alice answers bob's reply; bob sees it quoted. Then bob edits his message:
+// alice's copy, and her quote of it, follow, marked "(edited)".
+const ANSWER = "answering bob " + rnd();
+await alice.page.locator("li", { hasText: REPLY }).getByRole("button", { name: "Reply" }).click();
+await alice.page.getByText(/^Replying to/).waitFor({ timeout: 10000 });
+await alice.page.getByPlaceholder(/Encrypted before it leaves/).fill(ANSWER);
+await alice.page.getByRole("button", { name: "Send" }).click();
+const answerOnBob = bob.page.locator("li", { hasText: ANSWER });
+await answerOnBob.waitFor({ timeout: 30000 });
+assert.ok((await answerOnBob.innerText()).includes(REPLY), "bob sees which message alice answered");
+console.log("· alice replied to bob's message; bob sees it quoted");
+
+const EDITED = REPLY + " (revised)";
+await bob.page.getByRole("button", { name: "Edit message" }).last().click();
+const box = bob.page.getByPlaceholder(/Encrypted before it leaves/);
+assert.equal(await box.inputValue(), REPLY, "editing starts from the message's text");
+await box.fill(EDITED);
+await bob.page.getByRole("button", { name: "Save" }).click();
+await alice.page.locator("li", { hasText: EDITED }).filter({ hasText: "(edited)" }).first().waitFor({ timeout: 30000 });
+assert.equal(await box.inputValue(), "", "the composer is clear again after saving");
+console.log("· bob edited his message; alice sees the new text, marked edited");
+
 await bob.page.getByRole("button", { name: "Delete message" }).last().click();
 await bob.page.getByRole("button", { name: "Confirm delete for everyone" }).click();
 await bob.page.getByText("You deleted this message").waitFor({ timeout: 30000 });
 await alice.page.getByText(`${bob.handle} deleted this message`).waitFor({ timeout: 30000 });
 assert.equal(await alice.page.getByText(REPLY).count(), 0, "the withdrawn text is gone from alice's transcript");
+await alice.page.locator("li", { hasText: ANSWER }).getByText("A deleted message").waitFor({ timeout: 10000 });
 console.log("· bob deleted his reply; alice's copy is replaced");
 // The roster lists both members once the epoch has moved.
 await alice.page.getByRole("button", { name: "Members" }).click();

@@ -178,13 +178,13 @@ the group's encryption forgets the group and can rejoin from a new Welcome.
   takes effect until then. Preventing it outright means sending handshake
   messages as MLS public messages so the server can check proposals against
   roles.
-- **"Delete for everyone" is a request, not a guarantee.** The author's
-  client sends a deletion inside the group's encryption; members' clients
-  honour it only when it's signed by the key that signed the message, so no
-  one can withdraw someone else's words. But anyone who already received
-  the message could have kept it, and a modified client can ignore the
-  request. Messages received before this feature carry no signing key and
-  can't be withdrawn remotely.
+- **"Delete" and "edit" for everyone are requests, not guarantees.** The
+  author's client sends them inside the group's encryption; members'
+  clients honour them only when signed by the key that signed the message,
+  so no one can withdraw or rewrite someone else's words. But anyone who
+  already received the original could have kept it, and a modified client
+  can ignore the request. Messages received before this feature carry no
+  signing key and can't be changed remotely.
 - **ts-mls must be ≥ 1.6.4.** Earlier versions omit the UpdatePath from a
   commit removing a single member, which lets that member derive the next
   epoch and keep reading. The session suite fails on those versions.
