@@ -311,16 +311,41 @@ export default function Conversation({ session, onError, onChange, openModal, on
   const onScroll = () => {
     const el = scrollRef.current;
     atBottom.current = !el || el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-    if (atBottom.current) setUnseen(0);
+    if (atBottom.current) { setUnseen(0); session.markRead(); }
   };
+
+  // Where this visit's unread messages start: what had been read when the
+  // channel opened. Only what was waiting counts — what's on this device
+  // plus what the visit's first sync brings; messages arriving live after
+  // that are read as they come. The mark stays put for the visit and goes
+  // once you post. The first time it appears, the transcript opens at it.
+  const [readMark, setReadMark] = useState(session.readUpTo);
+  const visit = useRef({ syncs: session.syncs, caughtUpTo: null });
+  if (visit.current.caughtUpTo === null && session.syncs > visit.current.syncs) {
+    visit.current.caughtUpTo = session.history.at(-1)?.seq ?? 0;
+  }
+  const waited = visit.current.caughtUpTo;
+  const firstNew = readMark === null || q ? undefined
+    : session.history.find((m) => m.seq > readMark && (waited === null || m.seq <= waited)
+      && m.text !== undefined && !m.mine)?.seq;
+  const openedAtMark = useRef(false);
+
   useEffect(() => {
     const len = session.history.length;
     const added = len - seenLen.current;
     seenLen.current = len;
-    if (atBottom.current || added <= 0 || session.history[len - 1]?.mine) toEnd();
+    const mark = !openedAtMark.current && scrollRef.current?.querySelector("[data-unread-mark]");
+    if (mark) {
+      openedAtMark.current = true;
+      mark.scrollIntoView({ block: "start" });
+      const el = scrollRef.current;
+      atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    } else if (atBottom.current || added <= 0 || session.history[len - 1]?.mine) toEnd();
     else setUnseen((n) => n + added);
-  }, [session.history.length, session.history]);
-  useEffect(() => { toEnd(); }, [q]);
+    if (atBottom.current) session.markRead();
+  }, [session, session.history.length, session.history]);
+  const lastQ = useRef(q);
+  useEffect(() => { if (lastQ.current !== q) { lastQ.current = q; toEnd(); } }, [q]);
 
   // Clicking a reply's quote brings the quoted message into view and
   // flashes it, loading earlier history (and leaving search) if need be.
@@ -372,6 +397,7 @@ export default function Conversation({ session, onError, onChange, openModal, on
       return;
     }
     const answering = replyTo;
+    setReadMark(null);
     setDraft("");
     setReplyTo(null);
     try { await session.send(text, answering?.seq); onChange(); }
@@ -498,6 +524,12 @@ export default function Conversation({ session, onError, onChange, openModal, on
                   <span className="h-px flex-1 bg-gradient-to-r from-transparent to-white/10" />
                   <span className="rounded-full border border-white/[0.08] bg-ink-900 px-2.5 py-0.5">{dayLabel(m.at)}</span>
                   <span className="h-px flex-1 bg-gradient-to-l from-transparent to-white/10" />
+                </li>
+              ) : null}
+              {m.seq === firstNew && m.text !== undefined ? (
+                <li role="separator" data-unread-mark="" aria-label="New messages"
+                  className="my-4 flex items-center gap-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-rose-400">
+                  <span className="h-px flex-1 bg-rose-500/40" />New<span className="h-px w-8 bg-rose-500/40" />
                 </li>
               ) : null}
               {/* seq alone isn't unique: notices reuse the seq of the message they follow. */}
