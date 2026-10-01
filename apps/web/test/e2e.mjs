@@ -96,6 +96,14 @@ if (csp) {
   const others = alice.errors.filter((e) => !/Content Security Policy/i.test(e));
   alice.errors.splice(0, alice.errors.length, ...others);
   console.log("· CSP present and blocks injected inline script");
+  // The UI font is self-hosted and must load under that same policy (it
+  // refuses data: URIs, which bundlers like to inline small fonts as).
+  const fontLoaded = await alice.page.evaluate(async () => {
+    await document.fonts.load('14px "Inter Variable"');
+    return document.fonts.check('14px "Inter Variable"');
+  });
+  assert.ok(fontLoaded, "the self-hosted UI font should load under the CSP");
+  console.log("· self-hosted UI font loads under the CSP");
 } else {
   console.log("· (no CSP: dev server)");
 }
@@ -254,7 +262,7 @@ console.log("· bob replied; alice sees it attributed to", bob.handle, `(${lag}m
 // and alice's copy becomes "… deleted this message".
 await alice.page.getByRole("separator").filter({ hasText: "Today" }).first().waitFor({ timeout: 10000 });
 // Alice answers bob's reply; bob sees it quoted. Then bob edits his message:
-// alice's copy, and her quote of it, follow, marked "(edited)".
+// alice's copy, and her quote of it, follow, marked edited.
 const ANSWER = "answering bob " + rnd();
 await alice.page.locator("li", { hasText: REPLY }).getByRole("button", { name: "Reply" }).click();
 await alice.page.getByText(/^Replying to/).waitFor({ timeout: 10000 });
@@ -271,7 +279,7 @@ const box = bob.page.getByPlaceholder(/Encrypted before it leaves/);
 assert.equal(await box.inputValue(), REPLY, "editing starts from the message's text");
 await box.fill(EDITED);
 await bob.page.getByRole("button", { name: "Save" }).click();
-await alice.page.locator("li", { hasText: EDITED }).filter({ hasText: "(edited)" }).first().waitFor({ timeout: 30000 });
+await alice.page.locator("li", { hasText: EDITED }).filter({ hasText: "edited" }).first().waitFor({ timeout: 30000 });
 assert.equal(await box.inputValue(), "", "the composer is clear again after saving");
 console.log("· bob edited his message; alice sees the new text, marked edited");
 

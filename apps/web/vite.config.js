@@ -40,7 +40,13 @@ export default defineConfig({
   // Served from https://deadp0et.army/app/ alongside the marketing site.
   base: "/app/",
   // esnext so the pure-JS post-quantum crypto isn't downlevelled.
-  build: { target: "esnext", outDir: "dist" },
+  build: {
+    target: "esnext",
+    outDir: "dist",
+    // Small font subsets would otherwise be inlined as data: URIs, which the
+    // CSP (font-src 'self') rightly refuses. Ship them as files.
+    assetsInlineLimit: (file) => (/\.(woff2?|ttf|otf)$/.test(file) ? false : undefined),
+  },
   esbuild: { target: "esnext" },
   // ws: true so the presence WebSocket is proxied too, not just HTTP.
   // API_TARGET lets the test runner point a dev server at its own api.

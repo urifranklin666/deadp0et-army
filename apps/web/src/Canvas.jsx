@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Eraser, Palette, Trash2, Undo2 } from "lucide-react";
+import { Eraser, Palette, PenLine, Trash2, Undo2 } from "lucide-react";
 import { Presence } from "./lib/presence.js";
 
 /**
@@ -154,41 +154,46 @@ export default function Canvas({ session, onError, openModal }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex flex-wrap items-center gap-2 border-b border-white/10 px-4 py-2">
-        <Palette className="h-3.5 w-3.5 text-slate-600" />
+      <div className="flex flex-wrap items-center gap-1.5 border-b border-white/[0.07] px-3 py-2 sm:px-5">
+        <div className="flex items-center gap-1.5 rounded-xl border border-white/[0.07] bg-ink-900 px-2 py-1">
+        <Palette className="mr-0.5 h-3.5 w-3.5 text-slate-500" />
         {COLORS.map((c) => (
           <button key={c} onClick={() => { setColor(c); setErasing(false); }} aria-label={`Colour ${c}`}
-            className={`h-5 w-5 rounded-full border transition-transform hover:scale-110
-              ${color === c && !erasing ? "border-white scale-110" : "border-white/20"}`}
+            className={`h-5 w-5 rounded-full transition hover:scale-110
+              ${color === c && !erasing ? "scale-110 ring-2 ring-white ring-offset-2 ring-offset-ink-900" : "ring-1 ring-white/20"}`}
             style={{ background: c }} />
         ))}
-        <span className="mx-1 h-4 w-px bg-white/10" />
+        </div>
+        <div className="flex items-center gap-0.5 rounded-xl border border-white/[0.07] bg-ink-900 p-0.5">
         {WIDTHS.map((w) => (
           <button key={w} onClick={() => { setWidth(w); setErasing(false); }} aria-label={`Width ${w}`}
-            className={`flex h-6 w-6 items-center justify-center rounded transition-colors
-              ${width === w && !erasing ? "bg-white/15" : "hover:bg-white/5"}`}>
+            className={`flex h-7 w-7 items-center justify-center rounded-lg transition-colors
+              ${width === w && !erasing ? "bg-white/[0.12]" : "hover:bg-white/[0.06]"}`}>
             <span className="rounded-full bg-slate-300" style={{ width: w + 2, height: w + 2 }} />
           </button>
         ))}
-        <span className="mx-1 h-4 w-px bg-white/10" />
-        <button onClick={() => setErasing((v) => !v)} aria-label="Eraser"
-          className={`rounded p-1.5 transition-colors ${erasing ? "bg-rose-600/30 text-rose-300" : "text-slate-400 hover:bg-white/5"}`}>
+        </div>
+        <div className="flex items-center gap-0.5 rounded-xl border border-white/[0.07] bg-ink-900 p-0.5">
+        <button onClick={() => setErasing((v) => !v)} aria-label="Eraser" aria-pressed={erasing} title="Eraser"
+          className={`rounded-lg p-1.5 transition-colors ${erasing ? "bg-rose-500/20 text-rose-300" : "text-slate-400 hover:bg-white/[0.06] hover:text-white"}`}>
           <Eraser className="h-4 w-4" />
         </button>
-        <button onClick={undo} aria-label="Undo" disabled={!count}
-          className="rounded p-1.5 text-slate-400 transition-colors hover:bg-white/5 disabled:opacity-30">
+        <button onClick={undo} aria-label="Undo" disabled={!count} title="Undo"
+          className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-white disabled:opacity-30">
           <Undo2 className="h-4 w-4" />
         </button>
-        <button onClick={clear} aria-label="Clear board" disabled={!count}
-          className="rounded p-1.5 text-slate-400 transition-colors hover:bg-white/5 hover:text-rose-400 disabled:opacity-30">
+        <button onClick={clear} aria-label="Clear board" disabled={!count} title="Clear the board"
+          className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-rose-500/15 hover:text-rose-300 disabled:opacity-30">
           <Trash2 className="h-4 w-4" />
         </button>
-        <span className="ml-auto font-mono text-[10px] uppercase tracking-widest text-slate-600">
+        </div>
+        <span className="ml-auto flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-slate-500">
+          {peers.length ? <span className="h-1.5 w-1.5 rounded-full bg-cyan-400 shadow-[0_0_6px_rgba(34,211,238,.9)]" /> : null}
           {peers.length ? `${peers.length} live · ` : ""}{count} stroke{count === 1 ? "" : "s"} · e2ee
         </span>
       </div>
 
-      <div ref={wrapRef} className="relative min-h-0 flex-1 bg-black/40 [container-type:size]">
+      <div ref={wrapRef} className="relative m-2 min-h-0 flex-1 overflow-hidden rounded-xl border border-white/[0.06] bg-black/50 [container-type:size] sm:m-3">
         <canvas
           ref={canvasRef}
           onPointerDown={down}
@@ -206,7 +211,7 @@ export default function Canvas({ session, onError, openModal }) {
               <path d="M2 2 L2 14 L6 10.5 L8.5 16 L11 15 L8.5 9.5 L14 9 Z"
                 fill="#22d3ee" stroke="#05060a" strokeWidth="1.2" />
             </svg>
-            <span className="ml-3 rounded bg-cyan-500/20 px-1.5 py-0.5 font-mono text-[10px] text-cyan-200 backdrop-blur-sm">
+            <span className="ml-3 rounded-md bg-cyan-400 px-1.5 py-0.5 font-mono text-[10px] font-medium text-ink-950 shadow">
               {p.handle}
             </span>
           </div>
@@ -214,14 +219,16 @@ export default function Canvas({ session, onError, openModal }) {
 
         {!joined ? (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-            <p className="max-w-xs text-center text-[11px] leading-relaxed text-slate-500">
+            <p className="max-w-xs text-center text-xs leading-relaxed text-slate-500">
               This device isn't a member yet. Once invited, a collaborator publishes the board
               at the new epoch — earlier strokes stay unreadable, by design.
             </p>
           </div>
         ) : count === 0 ? (
-          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-            <p className="text-[11px] text-slate-700">Draw something incriminating.</p>
+          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center">
+            <PenLine className="h-6 w-6 text-slate-700" strokeWidth={1.5} />
+            <p className="mt-3 text-sm font-medium text-slate-500">Draw something incriminating.</p>
+            <p className="mt-1 text-xs text-slate-600">Every stroke is encrypted for this channel's members before it leaves.</p>
           </div>
         ) : null}
       </div>
