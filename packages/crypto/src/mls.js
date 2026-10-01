@@ -199,6 +199,16 @@ export class MlsClient {
     return encodeMlsMessage({ version: MLS_VERSION, wireformat: "mls_key_package", keyPackage: kp.publicPackage });
   }
 
+  /**
+   * This member's own leaf signature key (base64), as other members see it on
+   * our messages: the key reactions and other key-checked ops are filed under.
+   */
+  ownKey() {
+    const own = this.#state?.privatePath?.leafIndex;
+    const leaf = own === undefined ? null : this.#state.ratchetTree[own * 2]?.leaf;
+    return leaf ? b64(leaf.signaturePublicKey) : null;
+  }
+
   /** Every occupied leaf in the current epoch, with its credential identity. */
   members() {
     if (!this.#state) return [];

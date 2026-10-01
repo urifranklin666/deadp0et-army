@@ -3,6 +3,7 @@ import { MlsClient, SUITE, b64, unb64, keyPackageIdentity } from "@deadp0et/cryp
 import { api } from "./api.js";
 import { store, K } from "./db.js";
 import { T, decodeEnvelope, encodeEnvelope } from "./envelope.js";
+import { applyReaction } from "./transcript.js";
 
 export { SUITE };
 // Kept importable from here; they live apart so the sign-in screen can load
@@ -505,6 +506,12 @@ export class GroupSession {
             // Someone lost state to compaction. Answer with the board, but
             // stagger so a large group doesn't publish N identical snapshots.
             if (m.senderDeviceId !== this.deviceId) this.#answerSnapshotRequest();
+          } else if (env.t === T.REACT) {
+            // Filed under the signing key, so it counts once per key and only
+            // that key can withdraw it. Unknown emoji and non-chat targets are
+            // ignored (applyReaction checks both).
+            const target = Number.isInteger(env.s) && this.history.find((h) => h.seq === env.s && h.text !== undefined);
+            applyReaction(target, env.e, senderKey, sender, env.on !== false);
           } else if (env.t === T.DELETE || env.t === T.EDIT) {
             // Honoured only for a message signed by the same key: nobody can
             // withdraw or rewrite someone else's words. (Nor can an honest
@@ -595,6 +602,21 @@ export class GroupSession {
    * either way; what this can't do is make a modified client forget.
    */
   deleteMessage(seq) { return this.#exclusive(() => this.#deleteMessage(seq)); }
+
+  /** Add or remove our reaction to a chat message, for everyone in the group. */
+  react(seq, emoji, on) { return this.#exclusive(() => this.#react(seq, emoji, on)); }
+
+  async #react(seq, emoji, on) {
+    const entry = this.history.find((h) => h.seq === seq && h.text !== undefined);
+    const key = this.client?.ownKey();
+    if (!entry || !key) return false;
+    // Check it would change something before spending a message on it.
+    if (!applyReaction({ ...entry }, emoji, key, this.handle, on)) return false;
+    await this.#sendEnvelope({ t: T.REACT, s: seq, e: emoji, on });
+    applyReaction(entry, emoji, key, this.handle, on);
+    await this.#persist();
+    return true;
+  }
 
   /** Replace one of our own chat messages' text, for everyone (same terms as deletion). */
   editMessage(seq, text) { return this.#exclusive(() => this.#editMessage(seq, text)); }

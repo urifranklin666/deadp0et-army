@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from "react";
-import { AlertTriangle, ArrowDown, Hash, Info, Lock, Pencil, Reply, Trash2, ChevronLeft, MessageSquare, PenLine, RefreshCw, Search, Send, ShieldCheck, UserPlus, Users, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, Hash, Info, Lock, Pencil, Reply, SmilePlus, Trash2, ChevronLeft, MessageSquare, PenLine, RefreshCw, Search, Send, ShieldCheck, UserPlus, Users, X } from "lucide-react";
 import Canvas from "./Canvas.jsx";
 import { api } from "./lib/api.js";
 import { Presence } from "./lib/presence.js";
-import { groupsWith } from "./lib/transcript.js";
+import { REACTIONS, groupsWith } from "./lib/transcript.js";
+import { RichText, mentionsIn } from "./lib/format.jsx";
 import { Avatar, Button, fmtTime } from "./ui.jsx";
 
 export function EmptyState() {
@@ -222,6 +223,47 @@ export default function Conversation({ session, onError, onChange, openModal, on
   const composer = useRef(null);
   const setDraft = (text) => { setDraftState(text); if (!editing) session.saveDraft(text); };
   const startReply = (m) => { if (editing) stopEditing(); setReplyTo(m); composer.current?.focus(); };
+
+  // Reactions: one picker open at a time, keyed by the message's seq.
+  const [picker, setPicker] = useState(null);
+  const myKey = session.client?.ownKey?.() || null;
+  useEffect(() => {
+    if (picker === null) return undefined;
+    const close = (e) => { if (!e.target.closest?.("[data-picker]")) setPicker(null); };
+    const esc = (e) => { if (e.key === "Escape") setPicker(null); };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", esc);
+    return () => { document.removeEventListener("mousedown", close); document.removeEventListener("keydown", esc); };
+  }, [picker]);
+  const react = async (seq, emoji, on) => {
+    setPicker(null);
+    try { await session.react(seq, emoji, on); onChange(); }
+    catch (e) { onError(e.message); }
+  };
+
+  // @mention suggestions, from the channel roster, for the word at the caret.
+  const [roster, setRoster] = useState([]);
+  useEffect(() => {
+    if (session.removed) return undefined;
+    let dead = false;
+    api.members(session.channel.id).then((r) => { if (!dead) setRoster(r.members.map((m) => m.handle)); }).catch(() => {});
+    return () => { dead = true; };
+  }, [session, session.channel.id, session.epoch, session.removed]);
+  const [caret, setCaret] = useState(0);
+  const [pick, setPick] = useState(0);
+  const [mentionOff, setMentionOff] = useState(false);
+  const typed = /(?:^|\s)@([a-z0-9_]{0,32})$/i.exec(draft.slice(0, caret));
+  const suggestions = typed && !mentionOff
+    ? roster.filter((h) => h !== session.handle && h.startsWith(typed[1].toLowerCase())).slice(0, 6)
+    : [];
+  const completeMention = (handle) => {
+    const before = draft.slice(0, caret).replace(/@[a-z0-9_]*$/i, `@${handle} `);
+    const next = before + draft.slice(caret);
+    setDraft(next);
+    setCaret(before.length);
+    setPick(0);
+    requestAnimationFrame(() => { composer.current?.focus(); composer.current?.setSelectionRange(before.length, before.length); });
+  };
   const startEdit = (m) => {
     setReplyTo(null);
     if (!editing) setAside.current = draft;
@@ -464,7 +506,9 @@ export default function Conversation({ session, onError, onChange, openModal, on
                         </p>
                       ) : (
                       <div className="relative">
-                        <div title={`#${m.seq}`} className={`rounded-2xl px-3.5 py-2 text-[14px] leading-relaxed shadow-sm
+                        <div title={`#${m.seq}`} data-mentions-me={!m.mine && mentionsIn(m.text).has(session.handle) ? "" : undefined}
+                          className={`rounded-2xl px-3.5 py-2 text-[14px] leading-relaxed shadow-sm
+                          ${!m.mine && mentionsIn(m.text).has(session.handle) ? "ring-2 ring-amber-400/50" : ""}
                           ${m.mine
                             ? `bg-gradient-to-b from-rose-500 to-rose-600 text-white ${grouped ? "rounded-tr-md" : ""}`
                             : `border border-white/[0.07] bg-ink-800 text-slate-100 ${grouped ? "rounded-tl-md" : ""}`}`}>
@@ -479,13 +523,37 @@ export default function Conversation({ session, onError, onChange, openModal, on
                               </p>
                             );
                           })() : null}
-                          <p className="whitespace-pre-wrap break-words"><Highlight text={m.text} q={q} /></p>
+                          <div className="whitespace-pre-wrap break-words">
+                            <RichText text={m.text} me={session.handle} leaf={(t) => <Highlight text={t} q={q} />} />
+                          </div>
                         </div>
                         {joined ? (
-                          <div data-pinned={confirmDelete === m.seq ? "" : undefined}
+                          <div data-pinned={confirmDelete === m.seq || picker === m.seq ? "" : undefined}
                             className={`dp-actions absolute -top-4 z-10 flex items-center gap-0.5 whitespace-nowrap rounded-lg border border-white/10
                               bg-ink-850 p-0.5 shadow-lift sm:top-1/2 sm:-translate-y-1/2
                               ${m.mine ? "left-0 sm:left-auto sm:right-full sm:mr-2" : "right-0 sm:right-auto sm:left-full sm:ml-2"}`}>
+                            <span className="relative" data-picker="">
+                              <button onClick={() => setPicker((p) => (p === m.seq ? null : m.seq))} aria-label="Add reaction"
+                                aria-expanded={picker === m.seq} title="React"
+                                className="rounded-md p-1.5 text-slate-400 transition hover:bg-white/[0.08] hover:text-white">
+                                <SmilePlus className="h-3.5 w-3.5" />
+                              </button>
+                              {picker === m.seq ? (
+                                <span role="menu" aria-label="Reactions"
+                                  className={`absolute bottom-full z-20 mb-2 flex gap-0.5 rounded-xl border border-white/10 bg-ink-850 p-1 shadow-lift
+                                    animate-[dp-rise_0.12s_ease-out_both] ${m.mine ? "right-0" : "left-0"}`}>
+                                  {REACTIONS.map((e) => {
+                                    const on = !!(myKey && m.reactions?.[e]?.[myKey] !== undefined);
+                                    return (
+                                      <button key={e} role="menuitem" onClick={() => react(m.seq, e, !on)} aria-label={`React ${e}`}
+                                        className={`rounded-lg px-1.5 py-1 text-lg leading-none transition hover:scale-110 hover:bg-white/10 ${on ? "bg-white/10" : ""}`}>
+                                        {e}
+                                      </button>
+                                    );
+                                  })}
+                                </span>
+                              ) : null}
+                            </span>
                             <button onClick={() => startReply(m)} aria-label="Reply" title="Reply"
                               className="rounded-md p-1.5 text-slate-400 transition hover:bg-white/[0.08] hover:text-white">
                               <Reply className="h-3.5 w-3.5" />
@@ -509,6 +577,23 @@ export default function Conversation({ session, onError, onChange, openModal, on
                         ) : null}
                       </div>
                       )}
+                      {m.reactions && !m.deleted ? (
+                        <div className={`mt-1 flex flex-wrap gap-1 ${m.mine ? "justify-end" : ""}`}>
+                          {REACTIONS.filter((e) => m.reactions[e]).map((e) => {
+                            const who = m.reactions[e];
+                            const on = !!(myKey && who[myKey] !== undefined);
+                            const names = Object.values(who).map((h) => h || "someone");
+                            return (
+                              <button key={e} onClick={() => joined && react(m.seq, e, !on)} disabled={!joined}
+                                aria-pressed={on} aria-label={`${e} ${names.length}`} title={names.join(", ")}
+                                className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition
+                                  ${on ? "border-rose-400/50 bg-rose-500/15 text-rose-100" : "border-white/10 bg-white/[0.04] text-slate-300 hover:bg-white/[0.08]"}`}>
+                                <span className="text-sm leading-none">{e}</span>{names.length}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : null}
                       {(m.mine || grouped || m.edited) && !m.deleted ? (
                         <p className={`mt-0.5 flex items-center gap-1.5 px-1 text-[10px] text-slate-500 ${grouped && !m.edited && !m.mine ? "hidden" : ""}`}>
                           {m.mine && m.at ? <time dateTime={m.at} title={new Date(m.at).toLocaleString()}>{fmtTime(m.at)}</time> : null}
@@ -545,6 +630,18 @@ export default function Conversation({ session, onError, onChange, openModal, on
           </span> : null}
           {typingLine(typers)}
         </p>
+        {suggestions.length ? (
+          <ul id="mention-list" role="listbox" aria-label="Mention someone"
+            className="mb-2 w-64 overflow-hidden rounded-xl border border-white/10 bg-ink-850 p-1 shadow-lift animate-[dp-rise_0.12s_ease-out_both]">
+            {suggestions.map((h, i) => (
+              <li key={h} role="option" aria-selected={i === pick}
+                onMouseDown={(e) => { e.preventDefault(); completeMention(h); }}
+                className={`flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${i === pick ? "bg-white/[0.08] text-white" : "text-slate-300"}`}>
+                <Avatar name={h} size={20} /><span className="font-mono text-xs">@{h}</span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
         <div className={`rounded-2xl border bg-ink-850 shadow-lift transition
           ${joined ? "border-white/10 focus-within:border-rose-500/50 focus-within:ring-4 focus-within:ring-rose-500/10" : "border-white/[0.06] opacity-60"}`}>
         {replyTo || editing ? (
@@ -565,8 +662,22 @@ export default function Conversation({ session, onError, onChange, openModal, on
             rows={1}
             value={draft}
             disabled={!joined}
-            onChange={(e) => { setDraft(e.target.value); presence.current?.typing(!!e.target.value.trim()); }}
+            onChange={(e) => {
+              setDraft(e.target.value); setCaret(e.target.selectionStart); setMentionOff(false); setPick(0);
+              presence.current?.typing(!!e.target.value.trim());
+            }}
+            onSelect={(e) => setCaret(e.target.selectionStart)}
+            aria-autocomplete="list" aria-controls={suggestions.length ? "mention-list" : undefined}
             onKeyDown={(e) => {
+              if (suggestions.length) {
+                if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setPick((i) => (i + (e.key === "ArrowDown" ? 1 : suggestions.length - 1)) % suggestions.length);
+                  return;
+                }
+                if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); completeMention(suggestions[pick] || suggestions[0]); return; }
+                if (e.key === "Escape") { e.preventDefault(); setMentionOff(true); return; }
+              }
               if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
               if (e.key === "Escape") { if (editing) stopEditing(); else setReplyTo(null); }
             }}

@@ -16,6 +16,7 @@ export const T = {
   Y_REQUEST: "r", // { t:'r' } — "I have a gap, someone publish the board"
   DELETE: "d",    // { t:'d', s: seq } — the sender withdraws their own chat message
   EDIT: "e",      // { t:'e', s: seq, b: text } — the sender replaces their own chat message's text
+  REACT: "x",     // { t:'x', s: seq, e: emoji, on: bool } — add or remove one reaction (REACTIONS only)
 };
 
 export function encodeEnvelope(obj) {
