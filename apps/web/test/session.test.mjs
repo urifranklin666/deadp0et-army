@@ -45,6 +45,7 @@ const { MlsClient, SUITE, b64, unb64 } = await import("@deadp0et/crypto/mls");
 
 const { decodeMlsMessage } = await import("ts-mls");
 const { T, encodeEnvelope } = await import("../src/lib/envelope.js");
+const { groupsWith } = await import("../src/lib/transcript.js");
 
 async function seedUser(handle) {
   await q("DELETE FROM users WHERE handle=$1", [handle]);
@@ -741,6 +742,26 @@ console.log("· a leaf claiming someone else's name is attributed to its key's r
   assert.deepEqual(L4.history, L3.history, "and is stored as chunks from then on");
 }
 console.log("· the transcript is stored in chunks; a new message rewrites only the last one");
+
+// ---------------------------------- grouping never hides a trust warning
+
+// The transcript draws consecutive messages under one sender line. That
+// line carries "unverified" / "claims to be": a message must never lose it
+// by being grouped, and equal names from different keys must not group.
+{
+  const t0 = "2026-01-01T10:00:00Z", t1 = "2026-01-01T10:01:00Z";
+  const ok = { seq: 1, text: "a", at: t0, from: "alice", key: "K1" };
+  assert.equal(groupsWith(ok, { seq: 2, text: "b", at: t1, from: "alice", key: "K1" }), true, "same key, no warnings: grouped");
+  assert.equal(groupsWith(ok, { seq: 2, text: "b", at: t1, from: "alice", key: "K2" }), false, "a different key under the same name is not");
+  assert.equal(groupsWith(ok, { seq: 2, text: "b", at: t1, from: "alice", key: "K1", unverified: true }), false, "an unverified message keeps its warning");
+  assert.equal(groupsWith(ok, { seq: 2, text: "b", at: t1, from: "alice", key: "K1", claimed: "bob" }), false, "a false claim keeps its warning");
+  assert.equal(groupsWith(ok, { seq: 2, text: "b", at: t1, from: "alice", key: "K1", pendingKey: "K1" }), false, "pending attribution keeps its line");
+  assert.equal(groupsWith({ ...ok, claimed: "bob" }, { seq: 2, text: "b", at: t1, from: "alice", key: "K1" }), false, "nor does it borrow a warned one's");
+  assert.equal(groupsWith(ok, { seq: 2, text: "b", at: t1, from: "alice" }), false, "no key on record: no grouping");
+  assert.equal(groupsWith({ seq: 1, text: "a", at: t0, mine: true }, { seq: 2, text: "b", at: t1, mine: true }), true, "our own messages group");
+  assert.equal(groupsWith(ok, { seq: 2, text: "b", at: "2026-01-01T10:06:00Z", from: "alice", key: "K1" }), false, "five minutes apart: not grouped");
+}
+console.log("· message grouping never hides a trust warning or merges different keys");
 
 await settle();                                     // let fire-and-forget cursor reports land
 await q("DELETE FROM users WHERE handle = ANY($1)", [["sess_alice", "sess_bob", "sess_carol", "sess_dave", "sess_mallory"]]);

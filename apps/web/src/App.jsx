@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Hash, Loader2, LogOut, Plus, Skull } from "lucide-react";
+import { Bell, BellOff, Fingerprint, Hash, Laptop, Loader2, Lock, LogOut, Plus, ShieldCheck, Skull, Trash2, Users } from "lucide-react";
 import AuthScreen from "./AuthScreen.jsx";
 import PasskeysModal from "./Passkeys.jsx";
 import SessionsModal from "./Sessions.jsx";
 import Conversation, { EmptyState } from "./Conversation.jsx";
 import { ChoiceModal, ConfirmModal, PromptModal } from "./Modal.jsx";
-import { Banner } from "./ui.jsx";
+import { Avatar, Banner } from "./ui.jsx";
 import { api } from "./lib/api.js";
 import { belongsTo, store } from "./lib/db.js";
 import { withReauth } from "./lib/passkeys.js";
@@ -51,6 +51,13 @@ function App() {
   const mls = useRef(null);                       // lib/session.js, once loaded
 
   const bump = useCallback(() => setTick((t) => t + 1), []);
+
+  // Confirmations ("Invited …") fade on their own; errors stay until dismissed.
+  useEffect(() => {
+    if (!notice) return undefined;
+    const t = setTimeout(() => setNotice(null), 8000);
+    return () => clearTimeout(t);
+  }, [notice]);
 
   /* ----------------------------------------------------------- bootstrap */
 
@@ -323,24 +330,28 @@ function App() {
   }
 
   return (
-    <div className="flex h-full min-h-full flex-col bg-[#05060a] text-slate-200">
-      <header className="flex shrink-0 items-center gap-3 border-b border-white/10 px-4 py-2.5">
-        <Skull className="h-5 w-5 text-rose-500" strokeWidth={1.75} />
-        <span className="text-xs font-black tracking-[0.2em] text-white">
+    <div className="dp-grid flex h-full min-h-full flex-col bg-ink-950 font-sans text-slate-200">
+      <header className="relative z-10 flex shrink-0 items-center gap-3 border-b border-white/[0.07] bg-ink-950/80 px-3 py-2 backdrop-blur sm:px-4">
+        <span className="flex h-7 w-7 items-center justify-center rounded-lg border border-rose-500/30 bg-rose-500/10">
+          <Skull className="h-4 w-4 text-rose-400" strokeWidth={1.75} />
+        </span>
+        <span className="text-[13px] font-extrabold tracking-[0.18em] text-white">
           DEADP0ET<span className="text-rose-500">.ARMY</span>
         </span>
-        <span className="ml-2 hidden rounded border border-white/10 px-2 py-0.5 font-mono text-[10px] text-slate-500 sm:inline">
-          {mls.current?.SUITE}
+        <span title={mls.current?.SUITE ? `MLS cipher suite: ${mls.current.SUITE}` : undefined}
+          className="ml-1 hidden items-center gap-1.5 rounded-full border border-emerald-400/20 bg-emerald-400/[0.06] px-2.5 py-0.5
+            text-[11px] font-medium text-emerald-300 sm:inline-flex">
+          <Lock className="h-3 w-3" />End-to-end encrypted · post-quantum
         </span>
-        <div className="ml-auto flex items-center gap-3">
-          <span className="hidden font-mono text-[10px] text-slate-600 sm:inline">build {BUILD}</span>
-          <span className="font-mono text-[11px] text-slate-500">@{handle}</span>
+        <div className="ml-auto flex items-center gap-2">
           <button
             onClick={() => setModal({ kind: "signout" })}
-            className="rounded-lg border border-white/10 p-1.5 text-slate-400 hover:text-white"
+            className="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] py-1 pl-1 pr-1 text-slate-300
+              transition hover:border-white/20 hover:bg-white/[0.06] hover:text-white sm:pr-3"
             aria-label="Account"
           >
-            <LogOut className="h-4 w-4" />
+            <Avatar name={handle} size={26} />
+            <span className="hidden max-w-[10rem] truncate font-mono text-xs sm:inline">{handle}</span>
           </button>
         </div>
       </header>
@@ -348,40 +359,58 @@ function App() {
       <div className="flex min-h-0 flex-1">
         {/* channels */}
         {/* Phones show the list OR the open channel; md+ shows both. */}
-        <aside className={`${active ? "hidden md:flex" : "flex"} w-full shrink-0 flex-col border-white/10 md:w-56 md:border-r`}>
-          <div className="flex items-center justify-between px-3 py-2.5">
-            <span className="text-[10px] uppercase tracking-widest text-slate-500">Channels</span>
+        <aside className={`${active ? "hidden md:flex" : "flex"} w-full shrink-0 flex-col border-white/[0.07] bg-ink-900/60 md:w-64 md:border-r`}>
+          <div className="flex items-center justify-between px-4 pb-2 pt-4">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Channels</span>
             <button onClick={() => setModal({ kind: "channel" })} disabled={busy === "create"}
-              className="rounded p-1 text-slate-400 hover:bg-white/5 hover:text-white disabled:opacity-40"
-              aria-label="New channel">
+              className="rounded-md p-1.5 text-slate-400 transition hover:bg-white/[0.06] hover:text-white disabled:opacity-40"
+              aria-label="New channel" title="New channel">
               {busy === "create" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
             </button>
           </div>
-          <div className="dp-scroll min-h-0 flex-1 overflow-y-auto px-2 pb-2">
+          <nav className="dp-scroll min-h-0 flex-1 space-y-0.5 overflow-y-auto px-2 pb-3">
             {channels.length === 0 ? (
-              <p className="px-2 py-4 text-[11px] leading-relaxed text-slate-600">
-                No channels yet. Create one — it becomes an MLS group whose keys never reach the server.
-              </p>
-            ) : channels.map((ch) => (
-              <button key={ch.id} onClick={() => openChannel(ch)}
-                className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm transition-colors
-                  ${active?.channel?.id === ch.id ? "bg-rose-600/15 text-white" : "text-slate-400 hover:bg-white/5"}`}>
-                <Hash className="h-3.5 w-3.5 shrink-0 opacity-60" />
-                <span className={`truncate ${unread.has(ch.groupId) ? "font-semibold text-white" : ""}`}>{ch.slug}</span>
-                {unread.has(ch.groupId) ? (
-                  <span className="ml-auto h-2 w-2 shrink-0 rounded-full bg-rose-500" aria-label="unread" />
-                ) : null}
-              </button>
-            ))}
+              <div className="mx-2 mt-2 rounded-xl border border-dashed border-white/10 p-4 text-center">
+                <Hash className="mx-auto h-5 w-5 text-slate-600" />
+                <p className="mt-2 text-xs leading-relaxed text-slate-500">
+                  No channels yet. Each one becomes an MLS group whose keys never reach the server.
+                </p>
+                <button onClick={() => setModal({ kind: "channel" })}
+                  className="mt-3 rounded-lg bg-white/[0.06] px-3 py-1.5 text-xs font-medium text-slate-200 transition hover:bg-white/10">
+                  Create a channel
+                </button>
+              </div>
+            ) : channels.map((ch) => {
+              const on = active?.channel?.id === ch.id;
+              const news = unread.has(ch.groupId);
+              return (
+                <button key={ch.id} onClick={() => openChannel(ch)} aria-current={on ? "page" : undefined}
+                  className={`group relative flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors
+                    ${on ? "bg-white/[0.07] text-white" : "text-slate-400 hover:bg-white/[0.04] hover:text-slate-200"}`}>
+                  {on ? <span className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-rose-500" /> : null}
+                  <Hash className={`h-4 w-4 shrink-0 ${on ? "text-rose-400" : "text-slate-600 group-hover:text-slate-500"}`} />
+                  <span className={`truncate ${news ? "font-semibold text-white" : ""}`}>{ch.slug}</span>
+                  {news ? (
+                    <span className="ml-auto h-2 w-2 shrink-0 rounded-full bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,.8)]" aria-label="unread" />
+                  ) : null}
+                </button>
+              );
+            })}
+          </nav>
+          <div className="hidden border-t border-white/[0.06] px-4 py-3 md:block">
+            <p className="flex items-center gap-1.5 text-[11px] text-slate-500">
+              <ShieldCheck className="h-3.5 w-3.5 text-emerald-400/80" /> Keys live on this device only
+            </p>
           </div>
         </aside>
 
         {/* conversation */}
-        <main className={`${active ? "flex" : "hidden md:flex"} min-w-0 flex-1 flex-col`}>
+        <main className={`${active ? "flex" : "hidden md:flex"} relative min-w-0 flex-1 flex-col`}>
           {(err || notice) ? (
-            <div className="space-y-2 px-4 pt-3">
-              {err ? <Banner onClose={() => setErr(null)}>{err}</Banner> : null}
-              {notice ? <Banner kind="info" onClose={() => setNotice(null)}>{notice}</Banner> : null}
+            // Floats over the conversation rather than pushing it down.
+            <div className="pointer-events-none absolute inset-x-3 bottom-28 z-20 space-y-2 sm:inset-x-auto sm:bottom-auto sm:right-5 sm:top-16 sm:w-96">
+              {err ? <div className="pointer-events-auto"><Banner onClose={() => setErr(null)}>{err}</Banner></div> : null}
+              {notice ? <div className="pointer-events-auto"><Banner kind="ok" onClose={() => setNotice(null)}>{notice}</Banner></div> : null}
             </div>
           ) : null}
           {active ? (
@@ -469,17 +498,27 @@ function App() {
         // where it left off.
         <ChoiceModal
           title="Account"
+          header={(
+            <div className="mt-3 flex items-center gap-3 rounded-xl border border-white/[0.06] bg-white/[0.03] p-3">
+              <Avatar name={handle} size={36} />
+              <div className="min-w-0">
+                <p className="truncate font-mono text-sm text-white">@{handle}</p>
+                <p className="truncate font-mono text-[10px] text-slate-500" title={mls.current?.SUITE}>build {BUILD}</p>
+              </div>
+            </div>
+          )}
           body={'Signing out keeps this device\'s keys either way. "Everywhere" also ends every other session on your account — use it if a device is lost.'}
           choices={[
-            { label: "Passkeys…", onPick: () => { setModal({ kind: "passkeys" }); return false; } },
-            { label: "Sessions…", onPick: () => { setModal({ kind: "sessions" }); return false; } },
+            { label: "Passkeys…", icon: Fingerprint, hint: "Add a backup, remove one", onPick: () => { setModal({ kind: "passkeys" }); return false; } },
+            { label: "Sessions…", icon: Laptop, hint: "Every signed-in browser", onPick: () => { setModal({ kind: "sessions" }); return false; } },
             {
               label: notifyOn ? "Turn off desktop notifications" : "Turn on desktop notifications",
+              icon: notifyOn ? BellOff : Bell, hint: "Who and where — never what",
               onPick: async () => { setNotifyOn(await setNotifications(!notifyOn)); },
             },
-            { label: "Sign out", primary: true, onPick: async () => { await api.logout(); location.reload(); } },
-            { label: "Sign out everywhere", onPick: async () => { await api.logoutAll(); location.reload(); } },
-            { label: "Delete account…", onPick: () => { setModal({ kind: "delete" }); return false; } },
+            { label: "Sign out", icon: LogOut, primary: true, divider: true, onPick: async () => { await api.logout(); location.reload(); } },
+            { label: "Sign out everywhere", icon: Users, hint: "Ends every session on your account", onPick: async () => { await api.logoutAll(); location.reload(); } },
+            { label: "Delete account…", icon: Trash2, danger: true, divider: true, onPick: () => { setModal({ kind: "delete" }); return false; } },
           ]}
           onClose={() => setModal(null)}
         />

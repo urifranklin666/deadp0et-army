@@ -1,20 +1,36 @@
 import React, { useEffect, useRef, useState } from "react";
-import { AlertTriangle, ArrowDown, Hash, Pencil, Reply, Trash2, ChevronLeft, MessageSquare, PenLine, RefreshCw, Search, Send, Shield, UserPlus, Users, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, Hash, Info, Lock, Pencil, Reply, Trash2, ChevronLeft, MessageSquare, PenLine, RefreshCw, Search, Send, ShieldCheck, UserPlus, Users, X } from "lucide-react";
 import Canvas from "./Canvas.jsx";
 import { api } from "./lib/api.js";
 import { Presence } from "./lib/presence.js";
-import { Button, fmtTime } from "./ui.jsx";
+import { groupsWith } from "./lib/transcript.js";
+import { Avatar, Button, fmtTime } from "./ui.jsx";
 
 export function EmptyState() {
   return (
     <div className="flex flex-1 items-center justify-center p-8 text-center">
-      <div className="max-w-sm">
-        <Shield className="mx-auto h-8 w-8 text-slate-700" />
-        <p className="mt-3 text-sm text-slate-500">Pick a channel, or create one.</p>
-        <p className="mt-1 text-[11px] leading-relaxed text-slate-600">
+      <div className="max-w-md">
+        <div className="relative mx-auto flex h-20 w-20 items-center justify-center">
+          <span className="absolute inset-0 rounded-full bg-rose-500/10 blur-xl" />
+          <span className="relative flex h-16 w-16 items-center justify-center rounded-2xl border border-white/10 bg-ink-850 shadow-lift">
+            <ShieldCheck className="h-7 w-7 text-rose-400" strokeWidth={1.5} />
+          </span>
+        </div>
+        <h2 className="mt-6 text-lg font-semibold tracking-tight text-white">Pick a channel, or create one.</h2>
+        <p className="mt-2 text-sm leading-relaxed text-slate-400">
           Each channel is an MLS group. Messages are encrypted once for the whole group and the
           server stores only ciphertext it cannot read.
         </p>
+        <div className="mt-6 grid grid-cols-3 gap-2 text-left">
+          {[["Post-quantum", "ML-KEM-1024 key exchange, ML-DSA-87 signatures"],
+            ["Forward secret", "Keys ratchet; old messages stay sealed"],
+            ["Passkey only", "Nothing to phish or reuse"]].map(([t, d]) => (
+            <div key={t} className="rounded-xl border border-white/[0.07] bg-white/[0.02] p-3">
+              <p className="text-xs font-semibold text-slate-200">{t}</p>
+              <p className="mt-1 text-[11px] leading-snug text-slate-500">{d}</p>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -70,21 +86,28 @@ function Members({ session, openModal, onError }) {
   const canRemove = (m) => ["owner", "admin"].includes(mine?.role)
     && m.handle !== session.handle && m.role !== "owner" && !!session.client;
   const canSetRole = (m) => mine?.role === "owner" && m.role !== "owner";
-  const action = "rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-slate-500 disabled:opacity-40";
+  const action = "rounded-md px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-slate-500 transition disabled:opacity-40";
   return (
     <div ref={ref} className="relative">
-      <button onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-label="Members"
-        className="flex items-center gap-1 rounded px-1.5 py-1 font-mono text-[11px] text-slate-400 hover:bg-white/5 hover:text-white">
-        <Users className="h-3.5 w-3.5" />{members.length}
+      <button onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-label="Members" title="Members"
+        className={`flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium transition
+          ${open ? "bg-white/[0.08] text-white" : "text-slate-400 hover:bg-white/[0.06] hover:text-white"}`}>
+        <Users className="h-4 w-4" />{members.length}
       </button>
       {open ? (
-        <ul className="absolute right-0 top-full z-20 mt-1 max-h-72 min-w-[16rem] overflow-y-auto rounded-lg border
-          border-white/10 bg-[#0b0d14] p-1 shadow-2xl">
+        <ul className="dp-scroll absolute right-0 top-full z-30 mt-2 max-h-80 w-[min(22rem,calc(100vw-2rem))] overflow-y-auto rounded-xl border
+          border-white/10 bg-ink-850 p-1.5 shadow-lift animate-[dp-rise_0.12s_ease-out_both]">
+          <li className="px-2 pb-1.5 pt-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500" aria-hidden="true">
+            {members.length} member{members.length === 1 ? "" : "s"}
+          </li>
           {members.map((m) => (
-            <li key={m.handle} className="flex items-center gap-2 rounded px-2 py-1.5 text-xs">
-              <span className="min-w-0 flex-1 truncate font-mono text-slate-200">{m.handle}</span>
+            <li key={m.handle} className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-xs hover:bg-white/[0.04]">
+              <Avatar name={m.handle} size={24} />
+              <span className="min-w-0 flex-1 truncate font-mono text-slate-200">
+                {m.handle}{m.handle === session.handle ? <span className="ml-1 font-sans text-slate-500">(you)</span> : null}
+              </span>
               {m.role !== "member" ? (
-                <span className="text-[10px] uppercase tracking-wider text-rose-400/80">{m.role}</span>
+                <span className="rounded-full border border-rose-500/25 bg-rose-500/10 px-1.5 py-px text-[10px] font-medium uppercase tracking-wider text-rose-300">{m.role}</span>
               ) : null}
               {canSetRole(m) ? (
                 <button disabled={busy === m.handle}
@@ -102,9 +125,9 @@ function Members({ session, openModal, onError }) {
             </li>
           ))}
           {mine && mine.role !== "owner" && session.client ? (
-            <li className="mt-1 border-t border-white/10 pt-1">
+            <li className="mt-1.5 border-t border-white/[0.07] pt-1.5">
               <button onClick={() => { setOpen(false); openModal({ kind: "leave", session }); }}
-                className="w-full rounded px-2 py-1.5 text-left text-xs text-slate-400 hover:bg-rose-600/20 hover:text-rose-300">
+                className="w-full rounded-lg px-2 py-1.5 text-left text-xs text-rose-300/80 transition hover:bg-rose-500/10 hover:text-rose-300">
                 Leave channel
               </button>
             </li>
@@ -116,6 +139,34 @@ function Members({ session, openModal, onError }) {
 }
 
 const PAGE = 200;
+
+/** Centered explainer for an empty or unavailable transcript. */
+function Placeholder({ icon: Icon, title, children }) {
+  return (
+    <div className="mx-auto mt-16 max-w-sm text-center">
+      <span className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 bg-ink-850">
+        <Icon className="h-5 w-5 text-slate-500" />
+      </span>
+      {title ? <p className="mt-4 text-sm font-semibold text-slate-200">{title}</p> : null}
+      <p className={`${title ? "mt-1" : "mt-4"} text-xs leading-relaxed text-slate-500`}>{children}</p>
+    </div>
+  );
+}
+
+/** A line from the client itself (not a member): notices, audits, failures. */
+function SystemLine({ tone, icon: Icon, children }) {
+  const skin = tone === "amber"
+    ? "border-amber-400/20 bg-amber-400/[0.06] text-amber-200"
+    : "border-cyan-400/15 bg-cyan-400/[0.05] text-cyan-200";
+  return (
+    <div className="flex justify-center">
+      <div className={`flex max-w-xl items-start gap-2 rounded-xl border px-3 py-2 text-xs leading-relaxed ${skin}`}>
+        <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 opacity-80" />
+        <span>{children}</span>
+      </div>
+    </div>
+  );
+}
 
 /** Does a transcript entry match a (lower-cased) search? Text and sender only. */
 const matches = (m, q) => m.text !== undefined
@@ -275,41 +326,43 @@ export default function Conversation({ session, onError, onChange, openModal, on
 
   return (
     <>
-      <div className="flex shrink-0 items-center gap-2 border-b border-white/10 px-3 py-2.5 sm:gap-3 sm:px-4">
+      <div className="flex shrink-0 items-center gap-2 border-b border-white/[0.07] px-3 py-2.5 sm:gap-3 sm:px-5">
         <button onClick={onBack} aria-label="Back to channels"
-          className="-ml-1 rounded p-1 text-slate-400 hover:bg-white/5 hover:text-white md:hidden">
-          <ChevronLeft className="h-4 w-4" />
+          className="-ml-1 rounded-lg p-1.5 text-slate-400 transition hover:bg-white/[0.06] hover:text-white md:hidden">
+          <ChevronLeft className="h-5 w-5" />
         </button>
-        <Hash className="hidden h-4 w-4 shrink-0 text-slate-600 sm:block" />
-        <span className="min-w-0 truncate text-sm font-semibold text-white">{session.channel.slug}</span>
-        <span className="hidden shrink-0 rounded border border-white/10 px-1.5 py-0.5 font-mono text-[10px] text-slate-500 sm:inline">
-          epoch {session.epoch ?? "—"}
+        <Hash className="hidden h-5 w-5 shrink-0 text-rose-400/80 sm:block" />
+        <span className="min-w-0 truncate text-[15px] font-semibold tracking-tight text-white">{session.channel.slug}</span>
+        <span title="MLS epoch: advances with every membership change and key update"
+          className="hidden shrink-0 items-center gap-1 rounded-full border border-white/[0.08] bg-white/[0.03] px-2 py-0.5 font-mono text-[10px] text-slate-500 sm:inline-flex">
+          <Lock className="h-2.5 w-2.5" /><span>epoch {session.epoch ?? "—"}</span>
         </span>
 
-        <div className="flex shrink-0 rounded-lg border border-white/10 bg-white/5 p-0.5 sm:ml-4">
+        <div className="flex shrink-0 rounded-lg border border-white/[0.08] bg-ink-900 p-0.5 sm:ml-3" role="group" aria-label="View">
           {[["chat", "Chat", MessageSquare], ["canvas", "Canvas", PenLine]].map(([id, label, Icon]) => (
-            <button key={id} onClick={() => setMode(id)}
-              className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors
-                ${mode === id ? "bg-rose-600 text-white" : "text-slate-400 hover:text-white"}`}>
-              <Icon className="h-3 w-3" /><span className="sr-only sm:not-sr-only">{label}</span>
+            <button key={id} onClick={() => setMode(id)} aria-pressed={mode === id}
+              className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition
+                ${mode === id ? "bg-white/[0.1] text-white shadow-[inset_0_1px_0_rgba(255,255,255,.06)]" : "text-slate-500 hover:text-slate-200"}`}>
+              <Icon className={`h-3.5 w-3.5 ${mode === id ? "text-rose-400" : ""}`} /><span className="sr-only sm:not-sr-only">{label}</span>
             </button>
           ))}
         </div>
 
-        <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-2">
+        <div className="ml-auto flex shrink-0 items-center gap-0.5 sm:gap-1">
           {mode === "chat" ? (
             <button onClick={() => (searching ? closeSearch() : setSearching(true))} aria-pressed={searching}
-              className="rounded p-1.5 text-slate-500 hover:bg-white/5 hover:text-white" aria-label="Search messages">
-              <Search className="h-3.5 w-3.5" />
+              className={`rounded-lg p-2 transition ${searching ? "bg-white/[0.08] text-white" : "text-slate-400 hover:bg-white/[0.06] hover:text-white"}`}
+              aria-label="Search messages" title="Search (on this device)">
+              <Search className="h-4 w-4" />
             </button>
           ) : null}
           <Members session={session} openModal={openModal} onError={onError} />
           <button onClick={async () => { try { await session.sync(); onChange(); } catch (e) { onError(e.message); } }}
-            className="rounded p-1.5 text-slate-500 hover:bg-white/5 hover:text-white" aria-label="Sync">
-            <RefreshCw className="h-3.5 w-3.5" />
+            className="rounded-lg p-2 text-slate-400 transition hover:bg-white/[0.06] hover:text-white" aria-label="Sync" title="Sync now">
+            <RefreshCw className="h-4 w-4" />
           </button>
           <Button icon={UserPlus} variant="ghost" disabled={!joined}
-            onClick={invite} className="!px-2 !py-1.5 !text-xs sm:!px-3">
+            onClick={invite} className="ml-1 !px-2.5 !py-1.5 !text-xs sm:!px-3">
             <span className="sr-only sm:not-sr-only">Invite</span>
           </Button>
         </div>
@@ -318,14 +371,14 @@ export default function Conversation({ session, onError, onChange, openModal, on
       {mode === "canvas" ? <Canvas session={session} onError={onError} openModal={openModal} /> : (
       <>
       {searching ? (
-        <div className="flex shrink-0 items-center gap-2 border-b border-white/10 px-3 py-2 sm:px-4">
-          <Search className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+        <div className="flex shrink-0 items-center gap-2.5 border-b border-white/[0.07] bg-ink-900/60 px-3 py-2 sm:px-5">
+          <Search className="h-4 w-4 shrink-0 text-rose-400/80" />
           <input autoFocus value={query} onChange={(e) => { setQuery(e.target.value); setShown(PAGE); }}
             onKeyDown={(e) => { if (e.key === "Escape") closeSearch(); }}
             placeholder="Search this channel (on this device)" aria-label="Search this channel"
             className="min-w-0 flex-1 bg-transparent text-sm text-white placeholder:text-slate-600 focus:outline-none" />
           {q ? (
-            <span className="shrink-0 font-mono text-[10px] text-slate-500" role="status">
+            <span className="shrink-0 rounded-full bg-white/[0.06] px-2 py-0.5 font-mono text-[10px] text-slate-400" role="status">
               {source.length} match{source.length === 1 ? "" : "es"}
             </span>
           ) : null}
@@ -337,151 +390,176 @@ export default function Conversation({ session, onError, onChange, openModal, on
       ) : null}
       <div className="relative flex min-h-0 flex-1 flex-col">
       <div ref={scrollRef} onScroll={onScroll} role="log" aria-label="Messages"
-        className="dp-scroll min-h-0 flex-1 overflow-y-auto px-4 py-4">
+        className="dp-scroll min-h-0 flex-1 overflow-y-auto px-3 py-5 sm:px-6">
+        <div className="mx-auto w-full max-w-3xl">
         {!session.client && !session.removed ? (
-          <p className="mx-auto max-w-sm text-center text-[11px] leading-relaxed text-slate-600">
+          <Placeholder icon={Lock}>
             This device isn't a member yet. Once someone invites you, the Welcome arrives on the
             next poll and history starts from that point — earlier traffic stays unreadable, by design.
             If another of your devices is in this channel, invite your own handle from there.
-          </p>
+          </Placeholder>
         ) : session.history.length === 0 ? (
-          <p className="mx-auto max-w-sm text-center text-[11px] text-slate-600">
-            Nothing here yet. Say something unwise.
-          </p>
+          <Placeholder icon={MessageSquare} title="Nothing here yet.">
+            Say something unwise. It's encrypted on this device before it leaves, for the members of
+            #{session.channel.slug} and no one else.
+          </Placeholder>
         ) : q && source.length === 0 ? (
-          <p className="mx-auto max-w-sm text-center text-[11px] text-slate-600">
-            No messages here match “{query.trim()}”.
-          </p>
+          <Placeholder icon={Search}>No messages here match “{query.trim()}”.</Placeholder>
         ) : (
-          <ul className="space-y-2">
+          <ul>
             {hidden ? (
-              <li className="text-center">
+              <li className="mb-4 text-center">
                 <button onClick={() => setShown((n) => n + PAGE)}
-                  className="rounded-md border border-white/10 px-3 py-1 text-[11px] text-slate-400 hover:text-white">
+                  className="rounded-full border border-white/10 bg-white/[0.03] px-3.5 py-1 text-xs text-slate-400 transition hover:bg-white/[0.06] hover:text-white">
                   Show {Math.min(PAGE, hidden)} earlier {q ? "match" : "message"}{Math.min(PAGE, hidden) === 1 ? "" : q ? "es" : "s"}
                 </button>
               </li>
             ) : null}
-            {visible.map((m, i) => (
+            {visible.map((m, i) => {
+              const prev = visible[i - 1];
+              const newDay = dayOf(m) && dayOf(m) !== dayOf(prev || {});
+              // Consecutive messages from one signing key, close in time, read as
+              // one block; anything with a trust warning keeps its own sender line.
+              const grouped = !newDay && groupsWith(prev, m);
+              return (
               <React.Fragment key={`${m.seq}:${m.notice ? "n" : m.audit ? "a" : m.error ? "e" : "m"}:${hidden + i}`}>
-              {dayOf(m) && dayOf(m) !== dayOf(visible[i - 1] || {}) ? (
-                <li role="separator" className="flex items-center gap-3 py-1 text-[10px] uppercase tracking-wider text-slate-600">
-                  <span className="h-px flex-1 bg-white/10" />{dayLabel(m.at)}<span className="h-px flex-1 bg-white/10" />
+              {newDay ? (
+                <li role="separator" className="my-4 flex items-center gap-3 text-[11px] font-medium text-slate-500">
+                  <span className="h-px flex-1 bg-gradient-to-r from-transparent to-white/10" />
+                  <span className="rounded-full border border-white/[0.08] bg-ink-900 px-2.5 py-0.5">{dayLabel(m.at)}</span>
+                  <span className="h-px flex-1 bg-gradient-to-l from-transparent to-white/10" />
                 </li>
               ) : null}
               {/* seq alone isn't unique: notices reuse the seq of the message they follow. */}
-              <li className="animate-[dp-rise_0.25s_ease-out_both]">
-                {m.deleted ? (
-                  <div className={`flex ${m.mine ? "justify-end" : "justify-start"}`}>
-                    <p className="rounded-xl border border-dashed border-white/10 px-3 py-1.5 text-[11px] italic text-slate-500">
-                      {m.mine ? "You deleted this message" : `${m.from || "Someone"} deleted this message`}
-                    </p>
-                  </div>
-                ) : m.audit ? (
-                  <div className="flex items-start gap-2 rounded-lg border border-amber-500/25 bg-amber-950/20 px-3 py-2 text-[11px] text-amber-200">
-                    <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
-                    <span>
-                      {m.from || "someone"}{m.claimed ? ` (claiming to be ${m.claimed})` : ""} removed {m.audit.removed.join(", ")} from the group
-                    </span>
-                  </div>
+              <li className={`${grouped ? "mt-0.5" : i === 0 ? "" : "mt-3"} animate-[dp-rise_0.25s_ease-out_both]`}>
+                {m.audit ? (
+                  <SystemLine tone="amber" icon={AlertTriangle}>
+                    {m.from || "someone"}{m.claimed ? ` (claiming to be ${m.claimed})` : ""} removed {m.audit.removed.join(", ")} from the group
+                  </SystemLine>
                 ) : m.notice ? (
-                  <div className="flex items-start gap-2 rounded-lg border border-cyan-500/25 bg-cyan-950/20 px-3 py-2 text-[11px] text-cyan-200">
-                    <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
-                    <span>{m.notice}</span>
-                  </div>
+                  <SystemLine tone="cyan" icon={Info}>{m.notice}</SystemLine>
                 ) : m.error ? (
-                  <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-950/20 px-3 py-2 text-[11px] text-amber-300">
-                    <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
-                    <span>seq {m.seq}: undecryptable — {m.error}</span>
-                  </div>
+                  <SystemLine tone="amber" icon={AlertTriangle}>Message {m.seq} couldn't be decrypted — {m.error}</SystemLine>
                 ) : (
-                  <div className={`flex ${m.mine ? "justify-end" : "justify-start"}`}>
-                    <div className={`max-w-[75%] rounded-xl px-3 py-2 text-sm
-                      ${m.mine ? "bg-rose-600/25 text-rose-50" : "border border-white/10 bg-white/[0.04] text-slate-200"}`}>
-                      {!m.mine && m.from ? (
-                        <p className="mb-0.5 font-mono text-[10px] font-semibold text-cyan-300/80">
-                          <Highlight text={m.from} q={q} />
+                  <div className={`dp-msg group flex items-end gap-2.5 ${m.mine ? "flex-row-reverse" : ""}`}>
+                    {!m.mine ? (
+                      grouped ? <span className="w-8 shrink-0" /> : <Avatar name={m.from || "?"} size={32} className="mb-0.5" />
+                    ) : null}
+                    <div className={`flex min-w-0 max-w-[min(36rem,85%)] flex-col ${m.mine ? "items-end" : "items-start"}`}>
+                      {!m.mine && m.from && !grouped ? (
+                        <p className="mb-1 ml-1 flex flex-wrap items-baseline gap-x-1.5 text-xs">
+                          <span className="font-semibold text-slate-200"><Highlight text={m.from} q={q} /></span>
                           {m.unverified ? (
-                            <span className="ml-1 text-amber-400" title="No account has registered the key that signed this">(unverified)</span>
+                            <span className="text-amber-400" title="No account has registered the key that signed this">unverified</span>
                           ) : null}
                           {m.claimed ? (
-                            <span className="ml-1 text-amber-400" title="The sender's credential names someone else">claims to be {m.claimed}</span>
+                            <span className="text-amber-400" title="The sender's credential names someone else">claims to be {m.claimed}</span>
                           ) : null}
+                          {m.at ? <time className="text-[11px] text-slate-500" dateTime={m.at} title={new Date(m.at).toLocaleString()}>{fmtTime(m.at)}</time> : null}
                         </p>
                       ) : null}
-                      {m.re !== undefined ? (() => {
-                        const t = quoted(m.re);
-                        return (
-                          <p className="mb-1 border-l-2 border-white/20 pl-2 text-[11px] text-slate-400">
-                            {!t ? "A message not on this device"
-                              : t.deleted ? "A deleted message"
-                              : <><span className="font-mono">{t.mine ? "You" : t.from || "someone"}</span>: {snippet(t.text)}</>}
-                          </p>
-                        );
-                      })() : null}
-                      <p className="whitespace-pre-wrap break-words"><Highlight text={m.text} q={q} /></p>
-                      <p className="mt-1 flex items-center gap-1 font-mono text-[9px] text-slate-500">
-                        {m.at ? <time dateTime={m.at} title={new Date(m.at).toLocaleString()}>{fmtTime(m.at)}</time> : null}
-                        {m.at ? " · " : null}#{m.seq}
-                        {m.edited ? <span title="Edited by its author">(edited)</span> : null}
+                      {m.deleted ? (
+                        <p className="rounded-2xl border border-dashed border-white/10 px-3.5 py-2 text-xs italic text-slate-500">
+                          {m.mine ? "You deleted this message" : `${m.from || "Someone"} deleted this message`}
+                        </p>
+                      ) : (
+                      <div className="relative">
+                        <div title={`#${m.seq}`} className={`rounded-2xl px-3.5 py-2 text-[14px] leading-relaxed shadow-sm
+                          ${m.mine
+                            ? `bg-gradient-to-b from-rose-500 to-rose-600 text-white ${grouped ? "rounded-tr-md" : ""}`
+                            : `border border-white/[0.07] bg-ink-800 text-slate-100 ${grouped ? "rounded-tl-md" : ""}`}`}>
+                          {m.re !== undefined ? (() => {
+                            const t = quoted(m.re);
+                            return (
+                              <p className={`mb-1.5 rounded-lg border-l-2 px-2 py-1 text-xs
+                                ${m.mine ? "border-white/60 bg-black/15 text-rose-50/90" : "border-rose-400/60 bg-white/[0.04] text-slate-400"}`}>
+                                {!t ? "A message not on this device"
+                                  : t.deleted ? "A deleted message"
+                                  : <><span className="font-semibold">{t.mine ? "You" : t.from || "someone"}</span>: {snippet(t.text)}</>}
+                              </p>
+                            );
+                          })() : null}
+                          <p className="whitespace-pre-wrap break-words"><Highlight text={m.text} q={q} /></p>
+                        </div>
                         {joined ? (
-                          <button onClick={() => startReply(m)} aria-label="Reply" title="Reply"
-                            className="ml-1 rounded px-0.5 text-slate-500 hover:text-white">
-                            <Reply className="h-2.5 w-2.5" />
-                          </button>
+                          <div data-pinned={confirmDelete === m.seq ? "" : undefined}
+                            className={`dp-actions absolute -top-4 z-10 flex items-center gap-0.5 whitespace-nowrap rounded-lg border border-white/10
+                              bg-ink-850 p-0.5 shadow-lift sm:top-1/2 sm:-translate-y-1/2
+                              ${m.mine ? "left-0 sm:left-auto sm:right-full sm:mr-2" : "right-0 sm:right-auto sm:left-full sm:ml-2"}`}>
+                            <button onClick={() => startReply(m)} aria-label="Reply" title="Reply"
+                              className="rounded-md p-1.5 text-slate-400 transition hover:bg-white/[0.08] hover:text-white">
+                              <Reply className="h-3.5 w-3.5" />
+                            </button>
+                            {m.mine ? (
+                              <button onClick={() => startEdit(m)} aria-label="Edit message" title="Edit for everyone"
+                                className="rounded-md p-1.5 text-slate-400 transition hover:bg-white/[0.08] hover:text-white">
+                                <Pencil className="h-3.5 w-3.5" />
+                              </button>
+                            ) : null}
+                            {m.mine ? (
+                              <button onClick={() => remove(m.seq)} onBlur={() => setConfirmDelete(null)}
+                                title="Delete for everyone. Members' clients replace it; a modified client could keep a copy."
+                                aria-label={confirmDelete === m.seq ? "Confirm delete for everyone" : "Delete message"}
+                                className={`flex items-center gap-1 rounded-md p-1.5 text-xs transition ${confirmDelete === m.seq
+                                  ? "bg-rose-600 px-2 font-medium text-white" : "text-slate-400 hover:bg-rose-500/15 hover:text-rose-300"}`}>
+                                <Trash2 className="h-3.5 w-3.5" />{confirmDelete === m.seq ? "Delete for everyone?" : null}
+                              </button>
+                            ) : null}
+                          </div>
                         ) : null}
-                        {m.mine && joined ? (
-                          <button onClick={() => startEdit(m)} aria-label="Edit message" title="Edit for everyone"
-                            className="rounded px-0.5 text-slate-500 hover:text-white">
-                            <Pencil className="h-2.5 w-2.5" />
-                          </button>
-                        ) : null}
-                        {m.mine && joined ? (
-                          <button onClick={() => remove(m.seq)} onBlur={() => setConfirmDelete(null)}
-                            title="Delete for everyone. Members' clients replace it; a modified client could keep a copy."
-                            aria-label={confirmDelete === m.seq ? "Confirm delete for everyone" : "Delete message"}
-                            className={`ml-1 flex items-center gap-1 rounded px-1 ${confirmDelete === m.seq
-                              ? "bg-rose-600/40 text-rose-100" : "text-slate-500 hover:text-rose-300"}`}>
-                            <Trash2 className="h-2.5 w-2.5" />{confirmDelete === m.seq ? "Delete for everyone?" : null}
-                          </button>
-                        ) : null}
-                      </p>
+                      </div>
+                      )}
+                      {(m.mine || grouped || m.edited) && !m.deleted ? (
+                        <p className={`mt-0.5 flex items-center gap-1.5 px-1 text-[10px] text-slate-500 ${grouped && !m.edited && !m.mine ? "hidden" : ""}`}>
+                          {m.mine && m.at ? <time dateTime={m.at} title={new Date(m.at).toLocaleString()}>{fmtTime(m.at)}</time> : null}
+                          {m.edited ? <span title="Edited by its author">edited</span> : null}
+                        </p>
+                      ) : null}
                     </div>
                   </div>
                 )}
               </li>
               </React.Fragment>
-            ))}
+              );
+            })}
           </ul>
         )}
+        </div>
         <div ref={endRef} />
       </div>
       {unseen > 0 ? (
         <button onClick={toEnd}
-          className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-white/10
-            bg-rose-600 px-3 py-1 text-[11px] font-medium text-white shadow-lg hover:bg-rose-500">
-          <ArrowDown className="h-3 w-3" />{unseen} new message{unseen === 1 ? "" : "s"}
+          className="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full
+            bg-gradient-to-b from-rose-500 to-rose-600 px-3.5 py-1.5 text-xs font-medium text-white shadow-glow
+            animate-[dp-rise_0.2s_ease-out_both] hover:from-rose-400">
+          <ArrowDown className="h-3.5 w-3.5" />{unseen} new message{unseen === 1 ? "" : "s"}
         </button>
       ) : null}
       </div>
 
-      <div className="shrink-0 border-t border-white/10 p-3">
-        <p aria-live="polite" className="-mt-1 mb-1 h-4 truncate font-mono text-[10px] text-slate-500">
+      <div className="shrink-0 px-3 pb-3 pt-1 sm:px-6 sm:pb-5">
+        <div className="mx-auto w-full max-w-3xl">
+        <p aria-live="polite" className="mb-1 flex h-4 items-center gap-1.5 truncate pl-1 text-[11px] text-slate-500">
+          {typers.length ? <span className="inline-flex gap-0.5" aria-hidden="true">
+            {[0, 1, 2].map((d) => <span key={d} className="h-1 w-1 rounded-full bg-rose-400" style={{ animation: `dp-pulse 1s ${d * 0.15}s infinite` }} />)}
+          </span> : null}
           {typingLine(typers)}
         </p>
+        <div className={`rounded-2xl border bg-ink-850 shadow-lift transition
+          ${joined ? "border-white/10 focus-within:border-rose-500/50 focus-within:ring-4 focus-within:ring-rose-500/10" : "border-white/[0.06] opacity-60"}`}>
         {replyTo || editing ? (
-          <div className="mb-2 flex items-center gap-2 rounded-md border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] text-slate-400">
-            {editing ? <Pencil className="h-3 w-3 shrink-0" /> : <Reply className="h-3 w-3 shrink-0" />}
+          <div className="flex items-center gap-2 border-b border-white/[0.07] px-3 py-2 text-xs text-slate-400">
+            {editing ? <Pencil className="h-3.5 w-3.5 shrink-0 text-rose-400" /> : <Reply className="h-3.5 w-3.5 shrink-0 text-rose-400" />}
             <span className="min-w-0 flex-1 truncate">
-              {editing ? "Editing your message" : <>Replying to <span className="font-mono">{replyTo.mine ? "yourself" : replyTo.from || "someone"}</span>: {snippet(replyTo.text || "")}</>}
+              {editing ? "Editing your message" : <>Replying to <span className="font-semibold text-slate-200">{replyTo.mine ? "yourself" : replyTo.from || "someone"}</span>: {snippet(replyTo.text || "")}</>}
             </span>
             <button onClick={() => (editing ? stopEditing() : setReplyTo(null))}
-              aria-label={editing ? "Cancel editing" : "Cancel reply"} className="rounded p-0.5 hover:bg-white/10 hover:text-white">
-              <X className="h-3 w-3" />
+              aria-label={editing ? "Cancel editing" : "Cancel reply"} className="rounded-md p-1 transition hover:bg-white/10 hover:text-white">
+              <X className="h-3.5 w-3.5" />
             </button>
           </div>
         ) : null}
-        <div className="flex items-end gap-2">
+        <div className="flex items-end gap-2 p-1.5 pl-3">
           <textarea
             ref={composer}
             rows={1}
@@ -496,13 +574,18 @@ export default function Conversation({ session, onError, onChange, openModal, on
               // The full line wraps (and clips) in a one-row box on a phone.
               ? (window.matchMedia?.("(max-width: 639px)").matches ? "Encrypted before it leaves…" : "Encrypted before it leaves this tab…")
               : session.removed ? "Removed from this channel" : "Not a member yet"}
-            className="dp-scroll max-h-32 min-h-[38px] flex-1 resize-none rounded-lg border border-white/10 bg-black/50
-              px-3 py-2 text-sm text-white outline-none transition-colors placeholder:text-slate-600
-              focus:border-rose-500/60 disabled:opacity-50"
+            className="dp-scroll max-h-40 min-h-[40px] flex-1 resize-none bg-transparent py-2.5 text-[14px] leading-relaxed text-white
+              outline-none placeholder:text-slate-600 disabled:cursor-not-allowed"
           />
-          <Button icon={Send} busy={busy === "send"} disabled={!joined || !draft.trim()} onClick={send}>
-            {editing ? "Save" : "Send"}
+          <Button icon={Send} busy={busy === "send"} disabled={!joined || !draft.trim()} onClick={send}
+            className="!rounded-xl !px-3 sm:!px-4">
+            <span className="sr-only sm:not-sr-only">{editing ? "Save" : "Send"}</span>
           </Button>
+        </div>
+        </div>
+        <p className="mt-1.5 hidden items-center justify-center gap-1 text-[10px] text-slate-600 sm:flex">
+          <Lock className="h-2.5 w-2.5" /> End-to-end encrypted with MLS · Enter to send, Shift+Enter for a new line
+        </p>
         </div>
       </div>
       </>
