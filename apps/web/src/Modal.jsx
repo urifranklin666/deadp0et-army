@@ -189,3 +189,61 @@ export function ChoiceModal({ title, header, body, choices, onClose }) {
     </Shell>
   );
 }
+
+/**
+ * Jump to a channel by typing part of its name (Ctrl/⌘+K). Channels with
+ * news come first; names that start with the query rank above ones that
+ * merely contain it.
+ */
+export function SwitcherModal({ channels, unread, activeId, onPick, onClose }) {
+  const [q, setQ] = useState("");
+  const [pick, setPick] = useState(0);
+  const needle = q.trim().toLowerCase();
+  const rank = (ch) => (needle && !ch.slug.startsWith(needle) ? 2 : 0) + (unread.has(ch.groupId) ? 0 : 1);
+  const list = channels
+    .filter((ch) => ch.slug.includes(needle))
+    .map((ch, i) => ({ ch, i }))
+    .sort((a, b) => rank(a.ch) - rank(b.ch) || a.i - b.i)
+    .map(({ ch }) => ch)
+    .slice(0, 8);
+  const at = Math.min(pick, Math.max(0, list.length - 1));
+  const go = (ch) => { if (ch) { onClose(); onPick(ch); } };
+  return (
+    <Shell title="Jump to a channel" onClose={onClose}>
+      <input
+        value={q}
+        onChange={(e) => { setQ(e.target.value); setPick(0); }}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+            e.preventDefault();
+            if (list.length) setPick((at + (e.key === "ArrowDown" ? 1 : list.length - 1)) % list.length);
+          }
+          if (e.key === "Enter") { e.preventDefault(); go(list[at]); }
+        }}
+        placeholder="Channel name" aria-label="Channel name" spellCheck={false}
+        role="combobox" aria-expanded="true" aria-controls="switcher-list" aria-autocomplete="list"
+        aria-activedescendant={list[at] ? `switch-${list[at].id}` : undefined}
+        className="mt-4 w-full rounded-lg border border-white/10 bg-ink-950 px-3 py-2.5 font-mono text-sm text-white
+          outline-none transition placeholder:text-slate-600 focus:border-rose-500/60 focus:ring-4 focus:ring-rose-500/10"
+      />
+      <ul id="switcher-list" role="listbox" aria-label="Channels" className="-mx-1 mt-2 flex flex-col">
+        {list.length === 0 ? (
+          <li className="px-3 py-2 text-xs text-slate-500">No channel matches “{q.trim()}”.</li>
+        ) : list.map((ch, i) => (
+          <li key={ch.id} id={`switch-${ch.id}`} role="option" aria-selected={i === at}
+            onMouseDown={(e) => { e.preventDefault(); go(ch); }} onMouseMove={() => setPick(i)}
+            className={`flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm
+              ${i === at ? "bg-white/[0.08] text-white" : "text-slate-400"}`}>
+            <span className="text-slate-600">#</span>
+            <span className={`min-w-0 truncate ${unread.has(ch.groupId) ? "font-semibold text-white" : ""}`}>{ch.slug}</span>
+            {ch.id === activeId ? <span className="text-[11px] text-slate-500">open</span> : null}
+            {unread.has(ch.groupId) ? (
+              <span className="ml-auto h-2 w-2 shrink-0 rounded-full bg-rose-500" aria-label="unread" />
+            ) : null}
+          </li>
+        ))}
+      </ul>
+      <p className="mt-3 text-[10px] text-slate-600">↑↓ to choose · Enter to open · Esc to close</p>
+    </Shell>
+  );
+}
