@@ -16,6 +16,9 @@ apps/api        Fastify + Postgres + Redis. Key directory, ciphertext relay,
 apps/web        The console: passkey auth, encrypted chat, collaborative canvas.
 apps/site       Marketing site (deadp0et.army).
 packages/crypto Isomorphic MLS client — same code in Node and the browser.
+firmware/       Unrelated hardware projects that happen to live here:
+                nm-cyd-c5-survey, a dual-band Wi-Fi site survey for the
+                NM-CYD-C5 (ESP32-C5 Cheap Yellow Display). See its README.
 ```
 
 ## The security model, in one paragraph
