@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Bell, BellOff, Fingerprint, Hash, Laptop, Loader2, Lock, LogOut, Plus, Search, ShieldCheck, Skull, Trash2, Users } from "lucide-react";
+import { Bell, BellOff, Fingerprint, Hash, Laptop, Loader2, LogOut, Plus, Search, ShieldCheck, Skull, Trash2, Users } from "lucide-react";
 import AuthScreen from "./AuthScreen.jsx";
 import PasskeysModal from "./Passkeys.jsx";
 import SessionsModal from "./Sessions.jsx";
 import Conversation, { EmptyState } from "./Conversation.jsx";
 import { ChoiceModal, ConfirmModal, PromptModal, SwitcherModal } from "./Modal.jsx";
-import { Avatar, Banner } from "./ui.jsx";
+import { Avatar, Banner, Button } from "./ui.jsx";
 import { api } from "./lib/api.js";
 import { belongsTo, store } from "./lib/db.js";
 import { withReauth } from "./lib/passkeys.js";
@@ -19,6 +19,8 @@ const SYNC_MS = 2500;
 // covers a hint that got lost.
 const FALLBACK_MS = 20_000;
 const BUILD = typeof __BUILD__ === "string" ? __BUILD__ : "dev";  // set by vite.config.js
+// What boot() does, in order; the boot screen ticks through them.
+const BOOT_STEPS = ["passkey", "this tab", "mls stack", "device keys", "channels"];
 
 // The MLS stack is most of the bundle and nothing before sign-in needs it:
 // start fetching it now, in parallel, and let the passkey screen paint first.
@@ -49,6 +51,7 @@ function App() {
   channelsRef.current = channels;
   const [notifyOn, setNotifyOn] = useState(() => notificationsOn());
   const [modal, setModal] = useState(null);
+  const [bootStep, setBootStep] = useState(0);   // which BOOT_STEPS line we are on
   const mls = useRef(null);                       // lib/session.js, once loaded
 
   const bump = useCallback(() => setTick((t) => t + 1), []);
@@ -90,11 +93,15 @@ function App() {
 
   async function boot(h) {
     setHandle(h);
+    setBootStep(1);
     // Before touching any key material: another tab may already be using it.
     if (!(await claimTab(h))) { setPhase("elsewhere"); return; }
+    setBootStep(2);
     mls.current = await loadSession();
+    setBootStep(3);
     const { deviceId: id } = await mls.current.ensureDevice(h);
     setDeviceId(id);
+    setBootStep(4);
     const { channels: list } = await api.channels();
     setChannels(list);
     setPhase("ready");
@@ -316,10 +323,22 @@ function App() {
 
   if (phase === "boot") {
     return (
-      <div className="flex min-h-full items-center justify-center">
-        <div className="flex items-center gap-3 text-slate-400">
-          <Loader2 className="h-5 w-5 animate-spin text-rose-500" />
-          <span className="font-mono text-xs uppercase tracking-widest">initialising key material…</span>
+      <div className="dp-noise flex min-h-full items-center justify-center bg-ink-950 p-6">
+        <div className="w-full max-w-[17rem] font-mono" role="status" aria-live="polite">
+          <p className="dp-eyebrow flex items-center gap-2 text-blood">
+            <span className="h-2 w-2 bg-blood animate-[dp-blink_1s_steps(1)_infinite]" aria-hidden="true" />Booting
+          </p>
+          <ol className="mt-4 space-y-1.5 text-[12px]">
+            {BOOT_STEPS.map((step, i) => (
+              <li key={step} className={`flex items-center gap-3 ${i < bootStep ? "text-paper" : i === bootStep ? "text-acid" : "text-dim/50"}`}>
+                <span className="w-4 text-center" aria-hidden="true">{i < bootStep ? "■" : i === bootStep ? "▶" : "□"}</span>
+                <span className="uppercase tracking-label">{step}</span>
+              </li>
+            ))}
+          </ol>
+          <div className="mt-5 h-0.5 w-full bg-paper/10" aria-hidden="true">
+            <div className="h-full bg-acid transition-[width] duration-300" style={{ width: `${(bootStep / BOOT_STEPS.length) * 100}%` }} />
+          </div>
         </div>
       </div>
     );
@@ -329,47 +348,40 @@ function App() {
 
   if (phase === "elsewhere") {
     return (
-      <div className="flex min-h-full items-center justify-center p-6">
-        <div className="max-w-sm text-center">
-          <Skull className="mx-auto h-8 w-8 text-rose-500" strokeWidth={1.75} />
-          <h1 className="mt-4 text-lg font-bold text-white">Open in another tab</h1>
-          <p className="mt-2 text-sm leading-relaxed text-slate-400">
+      <div className="dp-noise flex min-h-full items-center justify-center bg-ink-950 p-6">
+        <div className="max-w-sm">
+          <span className="dp-mark h-9 w-9"><Skull className="h-5 w-5" strokeWidth={2} /></span>
+          <h1 className="mt-5 font-display text-[26px] leading-none tracking-[-0.03em] text-paper">Open in another tab</h1>
+          <p className="mt-3 text-sm leading-relaxed text-paper-dim">
             @{handle}'s keys are in use in another tab of this browser. Two tabs would advance the
             same encryption state separately and corrupt it, so only one may hold them. Close the
             other tab, then reload this one.
           </p>
-          <button onClick={() => location.reload()}
-            className="mt-5 rounded-lg border border-white/15 px-4 py-2 text-sm text-slate-200 hover:border-rose-500/50">
-            Reload
-          </button>
+          <Button variant="ghost" onClick={() => location.reload()} className="mt-6">Reload</Button>
         </div>
       </div>
     );
   }
 
+  const suite = mls.current?.SUITE;
   return (
-    <div className="dp-grid flex h-full min-h-full flex-col bg-ink-950 font-sans text-slate-200">
-      <header className="relative z-10 flex shrink-0 items-center gap-3 border-b border-white/[0.07] bg-ink-950/80 px-3 py-2 backdrop-blur sm:px-4">
-        <span className="flex h-7 w-7 items-center justify-center rounded-lg border border-rose-500/30 bg-rose-500/10">
-          <Skull className="h-4 w-4 text-rose-400" strokeWidth={1.75} />
+    <div className="dp-noise flex h-full min-h-full flex-col bg-ink-950 font-sans text-paper">
+      {/* The paper window bar: the console is the window the site's hero shows. */}
+      <header className="relative z-10 flex h-11 shrink-0 items-center gap-3 bg-paper px-3 text-ink-950 sm:px-4">
+        <span className="dp-mark h-7 w-7"><Skull className="h-4 w-4" strokeWidth={2} /></span>
+        <span className="font-display text-[13px] tracking-[-0.03em]">DEADP0ET.ARMY</span>
+        <span title={suite ? `MLS cipher suite: ${suite}` : undefined}
+          className="dp-tag ml-2 hidden items-center gap-2 text-ink-950/60 md:inline-flex">
+          <span className="h-1.5 w-1.5 bg-ink-950/60" aria-hidden="true" />E2EE · post-quantum · server: blind
         </span>
-        <span className="text-[13px] font-extrabold tracking-[0.18em] text-white">
-          DEADP0ET<span className="text-rose-500">.ARMY</span>
-        </span>
-        <span title={mls.current?.SUITE ? `MLS cipher suite: ${mls.current.SUITE}` : undefined}
-          className="ml-1 hidden items-center gap-1.5 rounded-full border border-emerald-400/20 bg-emerald-400/[0.06] px-2.5 py-0.5
-            text-[11px] font-medium text-emerald-300 sm:inline-flex">
-          <Lock className="h-3 w-3" />End-to-end encrypted · post-quantum
-        </span>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex items-center">
           <button
             onClick={() => setModal({ kind: "signout" })}
-            className="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] py-1 pl-1 pr-1 text-slate-300
-              transition hover:border-white/20 hover:bg-white/[0.06] hover:text-white sm:pr-3"
+            className="flex h-8 items-center gap-2 border-2 border-ink-950 bg-ink-950 text-paper transition-colors hover:bg-ink-800 sm:pr-3"
             aria-label="Account"
           >
-            <Avatar name={handle} size={26} />
-            <span className="hidden max-w-[10rem] truncate font-mono text-xs sm:inline">{handle}</span>
+            <Avatar name={handle} size={28} />
+            <span className="hidden max-w-[10rem] truncate font-mono text-xs sm:inline">@{handle}</span>
           </button>
         </div>
       </header>
@@ -377,29 +389,29 @@ function App() {
       <div className="flex min-h-0 flex-1">
         {/* channels */}
         {/* Phones show the list OR the open channel; md+ shows both. */}
-        <aside className={`${active ? "hidden md:flex" : "flex"} w-full shrink-0 flex-col border-white/[0.07] bg-ink-900/60 md:w-64 md:border-r`}>
+        <aside className={`${active ? "hidden md:flex" : "flex"} w-full shrink-0 flex-col border-paper/15 md:w-64 md:border-r`}>
           <div className="flex items-center justify-between px-4 pb-2 pt-4">
-            <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Channels</span>
+            <span className="dp-eyebrow text-dim">Channels</span>
             <button onClick={() => setModal({ kind: "switch" })} disabled={!channels.length}
-              className="ml-auto mr-0.5 rounded-md p-1.5 text-slate-400 transition hover:bg-white/[0.06] hover:text-white disabled:opacity-40"
+              className="ml-auto mr-0.5 p-1.5 text-dim transition-colors hover:bg-paper/10 hover:text-paper disabled:opacity-40"
               aria-label="Jump to a channel" title={`Jump to a channel (${/Mac|iP(hone|ad)/.test(navigator.platform) ? "⌘" : "Ctrl+"}K)`}>
               <Search className="h-4 w-4" />
             </button>
             <button onClick={() => setModal({ kind: "channel" })} disabled={busy === "create"}
-              className="rounded-md p-1.5 text-slate-400 transition hover:bg-white/[0.06] hover:text-white disabled:opacity-40"
+              className="p-1.5 text-dim transition-colors hover:bg-paper/10 hover:text-paper disabled:opacity-40"
               aria-label="New channel" title="New channel">
               {busy === "create" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
             </button>
           </div>
-          <nav className="dp-scroll min-h-0 flex-1 space-y-0.5 overflow-y-auto px-2 pb-3">
+          <nav className="dp-scroll min-h-0 flex-1 space-y-px overflow-y-auto px-2 pb-3">
             {channels.length === 0 ? (
-              <div className="mx-2 mt-2 rounded-xl border border-dashed border-white/10 p-4 text-center">
-                <Hash className="mx-auto h-5 w-5 text-slate-600" />
-                <p className="mt-2 text-xs leading-relaxed text-slate-500">
+              <div className="mx-2 mt-2 border border-dashed border-paper/25 p-4 text-center">
+                <Hash className="mx-auto h-5 w-5 text-dim" />
+                <p className="mt-2 font-mono text-[11px] leading-relaxed text-dim">
                   No channels yet. Each one becomes an MLS group whose keys never reach the server.
                 </p>
                 <button onClick={() => setModal({ kind: "channel" })}
-                  className="mt-3 rounded-lg bg-white/[0.06] px-3 py-1.5 text-xs font-medium text-slate-200 transition hover:bg-white/10">
+                  className="mt-3 border border-paper/30 px-3 py-1.5 font-mono text-[11px] font-semibold uppercase tracking-label text-paper transition-colors hover:border-paper hover:bg-paper/5">
                   Create a channel
                 </button>
               </div>
@@ -408,21 +420,21 @@ function App() {
               const news = unread.has(ch.groupId);
               return (
                 <button key={ch.id} onClick={() => openChannel(ch)} aria-current={on ? "page" : undefined}
-                  className={`group relative flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors
-                    ${on ? "bg-white/[0.07] text-white" : "text-slate-400 hover:bg-white/[0.04] hover:text-slate-200"}`}>
-                  {on ? <span className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-rose-500" /> : null}
-                  <Hash className={`h-4 w-4 shrink-0 ${on ? "text-rose-400" : "text-slate-600 group-hover:text-slate-500"}`} />
-                  <span className={`truncate ${news ? "font-semibold text-white" : ""}`}>{ch.slug}</span>
+                  className={`group relative flex w-full items-center gap-2 px-2.5 py-2 text-left font-mono text-[13px] transition-colors
+                    ${on ? "bg-paper/[0.07] text-paper" : "text-dim hover:bg-paper/[0.04] hover:text-paper"}`}>
+                  {on ? <span className="absolute inset-y-0 left-0 w-[3px] bg-paper" /> : null}
+                  <span className={`w-3 shrink-0 text-center ${on ? "text-blood" : "text-dim/60 group-hover:text-dim"}`} aria-hidden="true">#</span>
+                  <span className={`truncate ${news ? "font-semibold text-paper" : ""}`}>{ch.slug}</span>
                   {news ? (
-                    <span className="ml-auto h-2 w-2 shrink-0 rounded-full bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,.8)]" aria-label="unread" />
+                    <span className="ml-auto h-2 w-2 shrink-0 bg-blood" aria-label="unread" />
                   ) : null}
                 </button>
               );
             })}
           </nav>
-          <div className="hidden border-t border-white/[0.06] px-4 py-3 md:block">
-            <p className="flex items-center gap-1.5 text-[11px] text-slate-500">
-              <ShieldCheck className="h-3.5 w-3.5 text-emerald-400/80" /> Keys live on this device only
+          <div className="hidden border-t border-paper/15 px-4 py-3 md:block">
+            <p className="dp-tag flex items-center gap-1.5 text-dim">
+              <ShieldCheck className="h-3.5 w-3.5 text-acid" /> Keys: this device only
             </p>
           </div>
         </aside>
@@ -522,11 +534,11 @@ function App() {
         <ChoiceModal
           title="Account"
           header={(
-            <div className="mt-3 flex items-center gap-3 rounded-xl border border-white/[0.06] bg-white/[0.03] p-3">
+            <div className="mt-4 flex items-center gap-3 border border-paper/20 bg-ink-950 p-3">
               <Avatar name={handle} size={36} />
               <div className="min-w-0">
-                <p className="truncate font-mono text-sm text-white">@{handle}</p>
-                <p className="truncate font-mono text-[10px] text-slate-500" title={mls.current?.SUITE}>build {BUILD}</p>
+                <p className="truncate font-mono text-sm text-paper">@{handle}</p>
+                <p className="dp-tag truncate text-dim" title={mls.current?.SUITE}>build {BUILD}</p>
               </div>
             </div>
           )}

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Loader2, X } from "lucide-react";
+import { Button } from "./ui.jsx";
 
 /**
  * Replaces window.prompt/confirm/alert, which block the event loop, cannot be
@@ -40,19 +41,18 @@ export function Shell({ title, children, onClose }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-[6px] animate-[dp-rise_0.12s_ease-out_both]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-950/75 animate-[dp-rise_0.12s_ease-out_both]" onClick={onClose} />
       <div
         ref={ref}
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="relative w-full max-w-sm rounded-2xl border border-white/10 bg-ink-850 p-5 shadow-lift
-          ring-1 ring-black/40 animate-[dp-rise_0.15s_ease-out_both]"
+        className="relative w-full max-w-sm border-2 border-paper bg-ink-900 p-5 shadow-hard-lg animate-[dp-rise_0.15s_ease-out_both]"
       >
         <div className="flex items-start justify-between gap-3">
-          <h2 className="text-[15px] font-semibold tracking-tight text-white">{title}</h2>
+          <h2 className="font-display text-[19px] leading-tight tracking-[-0.02em] text-paper">{title}</h2>
           <button onClick={onClose} aria-label="Close"
-            className="rounded p-1 text-slate-500 transition-colors hover:bg-white/5 hover:text-white">
+            className="-mr-1 -mt-1 p-1 text-dim transition-colors hover:bg-paper/10 hover:text-paper">
             <X className="h-4 w-4" />
           </button>
         </div>
@@ -85,7 +85,7 @@ export function PromptModal({ title, label, hint, placeholder, submitLabel = "Co
 
   return (
     <Shell title={title} onClose={busy ? () => {} : onClose}>
-      <label className="mt-4 block text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">{label}</label>
+      <label className="dp-eyebrow mt-5 block text-dim">{label}</label>
       <input
         value={value}
         onChange={(e) => setValue(e.target.value)}
@@ -93,29 +93,26 @@ export function PromptModal({ title, label, hint, placeholder, submitLabel = "Co
         placeholder={placeholder}
         spellCheck={false}
         disabled={busy}
-        className="mt-2 w-full rounded-lg border border-white/10 bg-ink-950 px-3 py-2.5 font-mono text-sm text-white
-          outline-none transition placeholder:text-slate-600 focus:border-rose-500/60 focus:ring-4 focus:ring-rose-500/10 disabled:opacity-50"
+        className="mt-2 w-full border-2 border-paper/30 bg-ink-950 px-3 py-2.5 font-mono text-sm text-paper
+          outline-none transition-colors placeholder:text-dim/60 focus:border-paper disabled:opacity-50"
       />
-      {hint ? <p className="mt-2 text-[11px] leading-relaxed text-slate-500">{hint}</p> : null}
-      {value && invalid ? <p className="mt-1.5 text-[11px] text-amber-400">{invalid}</p> : null}
+      {hint ? <p className="mt-2 font-mono text-[11px] leading-relaxed text-dim">{hint}</p> : null}
+      {value && invalid ? <p className="mt-1.5 font-mono text-[11px] text-blood">{invalid}</p> : null}
       {err ? (
-        <div className="mt-3 flex items-start gap-2 rounded-lg border border-rose-500/40 bg-rose-950/40 px-3 py-2 text-xs text-rose-200">
-          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        <div className="mt-3 flex items-start gap-2 border border-blood/60 border-l-4 border-l-blood bg-ink-950 px-3 py-2 text-xs text-paper">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blood" />
           <span className="min-w-0 flex-1 break-words">{err}</span>
         </div>
       ) : null}
 
-      <div className="mt-5 flex justify-end gap-2">
+      <div className="mt-6 flex justify-end gap-3">
         <button onClick={onClose} disabled={busy}
-          className="rounded-lg px-3 py-2 text-xs font-medium text-slate-400 transition hover:bg-white/[0.06] hover:text-white disabled:opacity-40">
+          className="px-3 py-2 font-mono text-[11px] font-semibold uppercase tracking-label text-dim transition-colors hover:text-paper disabled:opacity-40">
           Cancel
         </button>
-        <button onClick={go} disabled={busy || !value.trim() || !!invalid}
-          className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-b from-rose-500 to-rose-600 px-3.5 py-2
-            text-xs font-semibold text-white shadow-glow transition hover:from-rose-400 hover:to-rose-500 disabled:opacity-40 disabled:shadow-none">
-          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+        <Button onClick={go} disabled={busy || !value.trim() || !!invalid} busy={busy}>
           {submitLabel}
-        </button>
+        </Button>
       </div>
     </Shell>
   );
@@ -130,18 +127,15 @@ export function ConfirmModal({ title, body, confirmLabel = "Confirm", danger, on
   };
   return (
     <Shell title={title} onClose={busy ? () => {} : onClose}>
-      <p className="mt-3 text-sm leading-relaxed text-slate-400">{body}</p>
-      <div className="mt-5 flex justify-end gap-2">
+      <p className="mt-3 text-sm leading-relaxed text-paper-dim">{body}</p>
+      <div className="mt-6 flex justify-end gap-3">
         <button onClick={onClose} disabled={busy}
-          className="rounded-lg px-3 py-2 text-xs font-medium text-slate-400 transition hover:bg-white/[0.06] hover:text-white disabled:opacity-40">
+          className="px-3 py-2 font-mono text-[11px] font-semibold uppercase tracking-label text-dim transition-colors hover:text-paper disabled:opacity-40">
           Cancel
         </button>
-        <button onClick={go} disabled={busy}
-          className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-semibold text-white transition disabled:opacity-40
-            ${danger ? "bg-gradient-to-b from-rose-500 to-rose-600 shadow-glow hover:from-rose-400" : "bg-white/10 hover:bg-white/15"}`}>
-          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+        <Button onClick={go} disabled={busy} busy={busy} variant={danger ? "danger" : "primary"}>
           {confirmLabel}
-        </button>
+        </Button>
       </div>
     </Shell>
   );
@@ -161,25 +155,25 @@ export function ChoiceModal({ title, header, body, choices, onClose }) {
   return (
     <Shell title={title} onClose={busy ? () => {} : onClose}>
       {header}
-      {body ? <p className="mt-3 text-xs leading-relaxed text-slate-400">{body}</p> : null}
+      {body ? <p className="mt-3 text-xs leading-relaxed text-paper-dim">{body}</p> : null}
       <div className="-mx-2 mt-3 flex flex-col">
         {choices.map((c, i) => {
           const Icon = c.icon;
           return (
             <React.Fragment key={c.label}>
-              {c.divider ? <div className="mx-2 my-1.5 h-px bg-white/[0.06]" /> : null}
+              {c.divider ? <div className="mx-2 my-1.5 h-px bg-paper/15" /> : null}
               <button onClick={() => pick(c)} disabled={!!busy}
                 data-autofocus={(c.primary || (i === 0 && !choices.some((x) => x.primary))) ? "" : undefined}
-                className={`group flex items-center gap-3 rounded-lg px-2.5 py-2 text-left text-sm transition-colors
-                  focus:outline-none focus-visible:bg-white/[0.06] disabled:opacity-40
-                  ${c.danger ? "text-rose-300 hover:bg-rose-500/10" : "text-slate-200 hover:bg-white/[0.06]"}`}>
-                <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border
-                  ${c.danger ? "border-rose-500/25 bg-rose-500/10 text-rose-400" : "border-white/[0.08] bg-white/[0.04] text-slate-400 group-hover:text-white"}`}>
+                className={`group flex items-center gap-3 px-2.5 py-2 text-left text-sm transition-colors
+                  focus:outline-none focus-visible:bg-paper/10 disabled:opacity-40
+                  ${c.danger ? "text-blood hover:bg-blood/10" : "text-paper hover:bg-paper/[0.07]"}`}>
+                <span className={`flex h-8 w-8 shrink-0 items-center justify-center border
+                  ${c.danger ? "border-blood/40 text-blood" : "border-paper/25 text-dim group-hover:border-paper group-hover:text-paper"}`}>
                   {busy === c.label ? <Loader2 className="h-4 w-4 animate-spin" /> : Icon ? <Icon className="h-4 w-4" /> : null}
                 </span>
                 <span className="min-w-0">
                   <span className="block font-medium">{c.label}</span>
-                  {c.hint ? <span className="block truncate text-[11px] text-slate-500">{c.hint}</span> : null}
+                  {c.hint ? <span className="dp-tag block truncate text-dim">{c.hint}</span> : null}
                 </span>
               </button>
             </React.Fragment>
@@ -223,27 +217,28 @@ export function SwitcherModal({ channels, unread, activeId, onPick, onClose }) {
         placeholder="Channel name" aria-label="Channel name" spellCheck={false}
         role="combobox" aria-expanded="true" aria-controls="switcher-list" aria-autocomplete="list"
         aria-activedescendant={list[at] ? `switch-${list[at].id}` : undefined}
-        className="mt-4 w-full rounded-lg border border-white/10 bg-ink-950 px-3 py-2.5 font-mono text-sm text-white
-          outline-none transition placeholder:text-slate-600 focus:border-rose-500/60 focus:ring-4 focus:ring-rose-500/10"
+        className="mt-4 w-full border-2 border-paper/30 bg-ink-950 px-3 py-2.5 font-mono text-sm text-paper
+          outline-none transition-colors placeholder:text-dim/60 focus:border-paper"
       />
       <ul id="switcher-list" role="listbox" aria-label="Channels" className="-mx-1 mt-2 flex flex-col">
         {list.length === 0 ? (
-          <li className="px-3 py-2 text-xs text-slate-500">No channel matches “{q.trim()}”.</li>
+          <li className="px-3 py-2 font-mono text-xs text-dim">No channel matches “{q.trim()}”.</li>
         ) : list.map((ch, i) => (
           <li key={ch.id} id={`switch-${ch.id}`} role="option" aria-selected={i === at}
             onMouseDown={(e) => { e.preventDefault(); go(ch); }} onMouseMove={() => setPick(i)}
-            className={`flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm
-              ${i === at ? "bg-white/[0.08] text-white" : "text-slate-400"}`}>
-            <span className="text-slate-600">#</span>
-            <span className={`min-w-0 truncate ${unread.has(ch.groupId) ? "font-semibold text-white" : ""}`}>{ch.slug}</span>
-            {ch.id === activeId ? <span className="text-[11px] text-slate-500">open</span> : null}
+            className={`relative flex cursor-pointer items-center gap-2 px-2.5 py-2 font-mono text-[13px]
+              ${i === at ? "bg-paper/[0.08] text-paper" : "text-dim"}`}>
+            {i === at ? <span className="absolute inset-y-0 left-0 w-[3px] bg-paper" aria-hidden="true" /> : null}
+            <span className={i === at ? "text-blood" : "text-dim/60"} aria-hidden="true">#</span>
+            <span className={`min-w-0 truncate ${unread.has(ch.groupId) ? "font-semibold text-paper" : ""}`}>{ch.slug}</span>
+            {ch.id === activeId ? <span className="dp-tag text-dim">open</span> : null}
             {unread.has(ch.groupId) ? (
-              <span className="ml-auto h-2 w-2 shrink-0 rounded-full bg-rose-500" aria-label="unread" />
+              <span className="ml-auto h-2 w-2 shrink-0 bg-blood" aria-label="unread" />
             ) : null}
           </li>
         ))}
       </ul>
-      <p className="mt-3 text-[10px] text-slate-600">↑↓ to choose · Enter to open · Esc to close</p>
+      <p className="dp-tag mt-3 text-dim/70">↑↓ choose · Enter open · Esc close</p>
     </Shell>
   );
 }

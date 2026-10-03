@@ -28,36 +28,36 @@ export default function PasskeysModal({ onClose }) {
 
   return (
     <Shell title="Passkeys" onClose={busy ? () => {} : onClose}>
-      <p className="mt-2 text-xs leading-relaxed text-slate-400">
+      <p className="mt-3 text-xs leading-relaxed text-paper-dim">
         Add a second passkey — another device, or a security key — so losing one doesn't lose the account.
       </p>
       {keys === null ? (
-        <Loader2 className="mx-auto mt-4 h-4 w-4 animate-spin text-slate-500" />
+        <Loader2 className="mx-auto mt-4 h-4 w-4 animate-spin text-dim" />
       ) : (
         <ul className="mt-4 space-y-1.5">
           {keys.map((k, i) => (
-            <li key={k.id} className="flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-xs">
-              <KeyRound className="h-3.5 w-3.5 shrink-0 text-slate-500" />
-              <span className="min-w-0 flex-1 text-slate-300">
+            <li key={k.id} className="flex items-center gap-2 border border-paper/20 px-3 py-2 text-xs">
+              <KeyRound className="h-3.5 w-3.5 shrink-0 text-dim" />
+              <span className="min-w-0 flex-1 text-paper">
                 Passkey {i + 1}
-                <span className="block font-mono text-[10px] text-slate-500">
+                <span className="block font-mono text-[10px] text-dim">
                   added {fmtTime(k.createdAt)}{k.lastUsedAt ? ` · last used ${fmtTime(k.lastUsedAt)}` : ""}
                 </span>
               </span>
               <button aria-label={`Remove passkey ${i + 1}`} disabled={keys.length === 1 || !!busy}
                 title={keys.length === 1 ? "Your only passkey can't be removed" : "Remove"}
                 onClick={() => run(k.id, () => withReauth(() => api.removePasskey(k.id)))}
-                className="rounded p-1 text-slate-500 hover:bg-rose-600/20 hover:text-rose-300 disabled:opacity-30">
+                className="p-1 text-dim transition-colors hover:bg-blood/15 hover:text-blood disabled:opacity-30">
                 {busy === k.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
               </button>
             </li>
           ))}
         </ul>
       )}
-      {err ? <p className="mt-3 text-xs text-rose-300">{err}</p> : null}
+      {err ? <p className="mt-3 font-mono text-[11px] text-blood">{err}</p> : null}
       <button data-autofocus="" disabled={!!busy} onClick={() => run("add", addPasskey)}
-        className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-rose-600 px-4 py-2 text-sm
-          font-semibold text-white hover:bg-rose-500 disabled:opacity-40">
+        className="mt-5 inline-flex w-full items-center justify-center gap-2 border-2 border-paper bg-paper px-4 py-2.5 font-mono text-[11px]
+          font-semibold uppercase tracking-label text-ink-950 shadow-hard transition-colors hover:bg-white disabled:opacity-40 disabled:shadow-none">
         {busy === "add" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
         Add a passkey
       </button>

@@ -48,7 +48,7 @@ function inline(text, ctx, keyBase) {
     const [tok] = m;
     const k = `${keyBase}k${n++}`;
     if (m[1]) {
-      out.push(<code key={k} className="rounded bg-black/30 px-1 py-px font-mono text-[0.9em]">{tok.slice(1, -1)}</code>);
+      out.push(<code key={k} className="bg-[rgba(140,136,128,.25)] px-1 py-px font-mono text-[0.9em]">{tok.slice(1, -1)}</code>);
     } else if (m[2]) {
       out.push(<strong key={k} className="font-semibold">{inline(tok.slice(2, -2), ctx, k)}</strong>);
     } else if (m[3] || m[4]) {
@@ -67,7 +67,7 @@ function inline(text, ctx, keyBase) {
       const isMe = ctx.me && tok.slice(1).toLowerCase() === ctx.me.toLowerCase();
       out.push(
         <span key={k} data-mention={tok.slice(1).toLowerCase()}
-          className={`rounded px-0.5 font-medium ${isMe ? "bg-amber-400/25 text-amber-100" : "bg-white/10"}`}>{tok}</span>,
+          className={`px-0.5 font-medium ${isMe ? "bg-acid text-ink-950" : "bg-[rgba(140,136,128,.25)]"}`}>{tok}</span>,
       );
     }
     at = m.index + tok.length;
@@ -81,6 +81,6 @@ export function RichText({ text, me, leaf = (s) => s }) {
   const parts = String(text).split(/```(?:[a-z0-9-]*\n)?([\s\S]*?)```/i);
   // split() with one capture group alternates: text, block, text, block, …
   return parts.map((p, i) => (i % 2
-    ? <pre key={`b${i}`} className="my-1 overflow-x-auto rounded-lg bg-black/40 p-2.5 font-mono text-[12px] leading-relaxed">{p.replace(/\n$/, "")}</pre>
+    ? <pre key={`b${i}`} className="my-1 overflow-x-auto border-l-2 border-blood bg-[rgba(140,136,128,.18)] p-2.5 font-mono text-[12px] leading-relaxed">{p.replace(/\n$/, "")}</pre>
     : <React.Fragment key={`p${i}`}>{inline(p, ctx, `p${i}`)}</React.Fragment>));
 }
