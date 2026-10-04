@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { AlertTriangle, ArrowDown, Check, Copy, Hash, Info, Lock, Pencil, Reply, SmilePlus, Trash2, ChevronLeft, MessageSquare, PenLine, RefreshCw, Search, Send, ShieldCheck, UserPlus, Users, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, Check, Copy, Info, Lock, Pencil, Reply, SmilePlus, Trash2, ChevronLeft, MessageSquare, PenLine, RefreshCw, Search, Send, UserPlus, Users, X } from "lucide-react";
 import Canvas from "./Canvas.jsx";
 import { api } from "./lib/api.js";
 import { Presence } from "./lib/presence.js";
@@ -9,29 +9,27 @@ import { Avatar, Button, fmtTime } from "./ui.jsx";
 
 export function EmptyState() {
   return (
-    <div className="flex flex-1 items-center justify-center p-8 text-center">
-      <div className="max-w-md">
-        <div className="relative mx-auto flex h-20 w-20 items-center justify-center">
-          <span className="absolute inset-0 rounded-full bg-rose-500/10 blur-xl" />
-          <span className="relative flex h-16 w-16 items-center justify-center rounded-2xl border border-white/10 bg-ink-850 shadow-lift">
-            <ShieldCheck className="h-7 w-7 text-rose-400" strokeWidth={1.5} />
-          </span>
-        </div>
-        <h2 className="mt-6 text-lg font-semibold tracking-tight text-white">Pick a channel, or create one.</h2>
-        <p className="mt-2 text-sm leading-relaxed text-slate-400">
+    <div className="flex flex-1 items-center justify-center p-8">
+      <div className="w-full max-w-md">
+        <p className="dp-eyebrow flex items-center gap-2 text-blood">
+          <span className="h-2 w-2 bg-blood" aria-hidden="true" />No channel open
+        </p>
+        <h2 className="mt-3 font-display text-[30px] leading-[0.95] tracking-[-0.04em] text-paper">
+          Pick a channel,<br />or create one.
+        </h2>
+        <p className="mt-4 text-sm leading-relaxed text-paper-dim">
           Each channel is an MLS group. Messages are encrypted once for the whole group and the
           server stores only ciphertext it cannot read.
         </p>
-        <div className="mt-6 grid grid-cols-3 gap-2 text-left">
-          {[["Post-quantum", "ML-KEM-1024 key exchange, ML-DSA-87 signatures"],
-            ["Forward secret", "Keys ratchet; old messages stay sealed"],
-            ["Passkey only", "Nothing to phish or reuse"]].map(([t, d]) => (
-            <div key={t} className="rounded-xl border border-white/[0.07] bg-white/[0.02] p-3">
-              <p className="text-xs font-semibold text-slate-200">{t}</p>
-              <p className="mt-1 text-[11px] leading-snug text-slate-500">{d}</p>
+        <dl className="mt-7 border-t-2 border-paper font-mono text-[12px]">
+          {[["Key exchange", "ML-KEM-1024"], ["Signatures", "ML-DSA-87"], ["Ratchet", "forward secret"],
+            ["Sign-in", "passkey only"], ["Server", "blind"]].map(([k, v]) => (
+            <div key={k} className="flex items-baseline justify-between gap-4 border-b border-paper/15 py-2">
+              <dt className="dp-tag text-dim">{k}</dt>
+              <dd className="text-paper">{v}</dd>
             </div>
           ))}
-        </div>
+        </dl>
       </div>
     </div>
   );
@@ -87,48 +85,48 @@ function Members({ session, openModal, onError }) {
   const canRemove = (m) => ["owner", "admin"].includes(mine?.role)
     && m.handle !== session.handle && m.role !== "owner" && !!session.client;
   const canSetRole = (m) => mine?.role === "owner" && m.role !== "owner";
-  const action = "rounded-md px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-slate-500 transition disabled:opacity-40";
+  const action = "dp-tag px-1.5 py-0.5 text-dim transition-colors disabled:opacity-40";
   return (
     <div ref={ref} className="relative">
       <button onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-label="Members" title="Members"
-        className={`flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium transition
-          ${open ? "bg-white/[0.08] text-white" : "text-slate-400 hover:bg-white/[0.06] hover:text-white"}`}>
+        className={`flex items-center gap-1.5 px-2 py-1.5 font-mono text-xs font-medium transition-colors
+          ${open ? "bg-paper text-ink-950" : "text-dim hover:bg-paper/10 hover:text-paper"}`}>
         <Users className="h-4 w-4" />{members.length}
       </button>
       {open ? (
-        <ul className="dp-scroll absolute right-0 top-full z-30 mt-2 max-h-80 w-[min(22rem,calc(100vw-2rem))] overflow-y-auto rounded-xl border
-          border-white/10 bg-ink-850 p-1.5 shadow-lift animate-[dp-rise_0.12s_ease-out_both]">
-          <li className="px-2 pb-1.5 pt-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500" aria-hidden="true">
+        <ul className="dp-scroll absolute right-0 top-full z-30 mt-2 max-h-80 w-[min(22rem,calc(100vw-2rem))] overflow-y-auto border
+          border-paper/30 bg-ink-900 p-1.5 shadow-pop animate-[dp-rise_0.12s_ease-out_both]">
+          <li className="dp-eyebrow px-2 pb-1.5 pt-1 text-dim" aria-hidden="true">
             {members.length} member{members.length === 1 ? "" : "s"}
           </li>
           {members.map((m) => (
-            <li key={m.handle} className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-xs hover:bg-white/[0.04]">
+            <li key={m.handle} className="flex items-center gap-2.5 px-2 py-1.5 text-xs hover:bg-paper/[0.05]">
               <Avatar name={m.handle} size={24} />
-              <span className="min-w-0 flex-1 truncate font-mono text-slate-200">
-                {m.handle}{m.handle === session.handle ? <span className="ml-1 font-sans text-slate-500">(you)</span> : null}
+              <span className="min-w-0 flex-1 truncate font-mono text-paper">
+                {m.handle}{m.handle === session.handle ? <span className="ml-1 text-dim">(you)</span> : null}
               </span>
               {m.role !== "member" ? (
-                <span className="rounded-full border border-rose-500/25 bg-rose-500/10 px-1.5 py-px text-[10px] font-medium uppercase tracking-wider text-rose-300">{m.role}</span>
+                <span className="dp-tag border border-blood/50 px-1.5 py-px text-blood">{m.role}</span>
               ) : null}
               {canSetRole(m) ? (
                 <button disabled={busy === m.handle}
                   onClick={() => setRole(m.handle, m.role === "admin" ? "member" : "admin")}
-                  className={`${action} hover:bg-white/10 hover:text-white`}>
+                  className={`${action} hover:bg-paper/10 hover:text-paper`}>
                   {m.role === "admin" ? "Revoke admin" : "Make admin"}
                 </button>
               ) : null}
               {canRemove(m) ? (
                 <button onClick={() => { setOpen(false); openModal({ kind: "remove", session, handle: m.handle }); }}
-                  className={`${action} hover:bg-rose-600/20 hover:text-rose-300`}>
+                  className={`${action} hover:bg-blood/15 hover:text-blood`}>
                   Remove
                 </button>
               ) : null}
             </li>
           ))}
           {mine && mine.role !== "owner" && session.client ? (
-            <li className="mt-1.5 border-t border-white/[0.07] pt-1.5">
+            <li className="mt-1.5 border-t border-paper/15 pt-1.5">
               <button onClick={() => { setOpen(false); openModal({ kind: "leave", session }); }}
-                className="w-full rounded-lg px-2 py-1.5 text-left text-xs text-rose-300/80 transition hover:bg-rose-500/10 hover:text-rose-300">
+                className="w-full px-2 py-1.5 text-left font-mono text-xs text-blood/80 transition-colors hover:bg-blood/10 hover:text-blood">
                 Leave channel
               </button>
             </li>
@@ -145,24 +143,23 @@ const PAGE = 200;
 function Placeholder({ icon: Icon, title, children }) {
   return (
     <div className="mx-auto mt-16 max-w-sm text-center">
-      <span className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 bg-ink-850">
-        <Icon className="h-5 w-5 text-slate-500" />
+      <span className="mx-auto flex h-11 w-11 items-center justify-center border border-paper/30 bg-ink-900">
+        <Icon className="h-5 w-5 text-dim" />
       </span>
-      {title ? <p className="mt-4 text-sm font-semibold text-slate-200">{title}</p> : null}
-      <p className={`${title ? "mt-1" : "mt-4"} text-xs leading-relaxed text-slate-500`}>{children}</p>
+      {title ? <p className="mt-4 font-display text-[18px] tracking-[-0.02em] text-paper">{title}</p> : null}
+      <p className={`${title ? "mt-2" : "mt-4"} text-xs leading-relaxed text-dim`}>{children}</p>
     </div>
   );
 }
 
 /** A line from the client itself (not a member): notices, audits, failures. */
 function SystemLine({ tone, icon: Icon, children }) {
-  const skin = tone === "amber"
-    ? "border-amber-400/20 bg-amber-400/[0.06] text-amber-200"
-    : "border-cyan-400/15 bg-cyan-400/[0.05] text-cyan-200";
+  const tint = tone === "amber" ? "text-blood" : "text-ice";
+  const skin = tone === "amber" ? "border-l-blood" : "border-l-ice";
   return (
     <div className="flex justify-center">
-      <div className={`flex max-w-xl items-start gap-2 rounded-xl border px-3 py-2 text-xs leading-relaxed ${skin}`}>
-        <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 opacity-80" />
+      <div className={`flex max-w-xl items-start gap-2 border border-l-4 border-paper/15 bg-ink-900 px-3 py-2 font-mono text-[11px] leading-relaxed text-paper-dim ${skin}`}>
+        <Icon className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${tint}`} />
         <span>{children}</span>
       </div>
     </div>
@@ -205,7 +202,7 @@ function Highlight({ text, q }) {
   let at = 0;
   for (let i = lower.indexOf(q); i !== -1; i = lower.indexOf(q, at)) {
     if (i > at) out.push(text.slice(at, i));
-    out.push(<mark key={i} className="rounded-sm bg-amber-400/30 text-inherit">{text.slice(i, i + q.length)}</mark>);
+    out.push(<mark key={i} className="bg-acid/30 text-inherit">{text.slice(i, i + q.length)}</mark>);
     at = i + q.length;
   }
   out.push(text.slice(at));
@@ -434,24 +431,24 @@ export default function Conversation({ session, onError, onChange, openModal, on
 
   return (
     <>
-      <div className="flex shrink-0 items-center gap-2 border-b border-white/[0.07] px-3 py-2.5 sm:gap-3 sm:px-5">
+      <div className="flex shrink-0 items-center gap-2 border-b border-paper/15 px-3 py-2.5 sm:gap-3 sm:px-5">
         <button onClick={onBack} aria-label="Back to channels"
-          className="-ml-1 rounded-lg p-1.5 text-slate-400 transition hover:bg-white/[0.06] hover:text-white md:hidden">
+          className="-ml-1 p-1.5 text-dim transition-colors hover:bg-paper/10 hover:text-paper md:hidden">
           <ChevronLeft className="h-5 w-5" />
         </button>
-        <Hash className="hidden h-5 w-5 shrink-0 text-rose-400/80 sm:block" />
-        <span className="min-w-0 truncate text-[15px] font-semibold tracking-tight text-white">{session.channel.slug}</span>
+        <span className="hidden font-display text-[18px] leading-none text-blood sm:block" aria-hidden="true">#</span>
+        <span className="min-w-0 truncate font-display text-[18px] leading-none tracking-[-0.02em] text-paper">{session.channel.slug}</span>
         <span title="MLS epoch: advances with every membership change and key update"
-          className="hidden shrink-0 items-center gap-1 rounded-full border border-white/[0.08] bg-white/[0.03] px-2 py-0.5 font-mono text-[10px] text-slate-500 sm:inline-flex">
+          className="hidden shrink-0 items-center gap-1.5 border border-paper/25 px-2 py-0.5 font-mono text-[10px] tracking-wider text-dim sm:inline-flex">
           <Lock className="h-2.5 w-2.5" /><span>epoch {session.epoch ?? "—"}</span>
         </span>
 
-        <div className="flex shrink-0 rounded-lg border border-white/[0.08] bg-ink-900 p-0.5 sm:ml-3" role="group" aria-label="View">
+        <div className="flex shrink-0 border border-paper/25 p-0.5 sm:ml-3" role="group" aria-label="View">
           {[["chat", "Chat", MessageSquare], ["canvas", "Canvas", PenLine]].map(([id, label, Icon]) => (
             <button key={id} onClick={() => setMode(id)} aria-pressed={mode === id}
-              className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition
-                ${mode === id ? "bg-white/[0.1] text-white shadow-[inset_0_1px_0_rgba(255,255,255,.06)]" : "text-slate-500 hover:text-slate-200"}`}>
-              <Icon className={`h-3.5 w-3.5 ${mode === id ? "text-rose-400" : ""}`} /><span className="sr-only sm:not-sr-only">{label}</span>
+              className={`flex items-center gap-1.5 px-2.5 py-1 font-mono text-[11px] font-semibold uppercase tracking-label transition-colors
+                ${mode === id ? "bg-paper text-ink-950" : "text-dim hover:text-paper"}`}>
+              <Icon className="h-3.5 w-3.5" strokeWidth={2.25} /><span className="sr-only sm:not-sr-only">{label}</span>
             </button>
           ))}
         </div>
@@ -459,18 +456,18 @@ export default function Conversation({ session, onError, onChange, openModal, on
         <div className="ml-auto flex shrink-0 items-center gap-0.5 sm:gap-1">
           {mode === "chat" ? (
             <button onClick={() => (searching ? closeSearch() : setSearching(true))} aria-pressed={searching}
-              className={`rounded-lg p-2 transition ${searching ? "bg-white/[0.08] text-white" : "text-slate-400 hover:bg-white/[0.06] hover:text-white"}`}
+              className={`p-2 transition-colors ${searching ? "bg-paper text-ink-950" : "text-dim hover:bg-paper/10 hover:text-paper"}`}
               aria-label="Search messages" title="Search (on this device)">
               <Search className="h-4 w-4" />
             </button>
           ) : null}
           <Members session={session} openModal={openModal} onError={onError} />
           <button onClick={async () => { try { await session.sync(); onChange(); } catch (e) { onError(e.message); } }}
-            className="rounded-lg p-2 text-slate-400 transition hover:bg-white/[0.06] hover:text-white" aria-label="Sync" title="Sync now">
+            className="p-2 text-dim transition-colors hover:bg-paper/10 hover:text-paper" aria-label="Sync" title="Sync now">
             <RefreshCw className="h-4 w-4" />
           </button>
           <Button icon={UserPlus} variant="ghost" disabled={!joined}
-            onClick={invite} className="ml-1 !px-2.5 !py-1.5 !text-xs sm:!px-3">
+            onClick={invite} className="ml-1 !px-2.5 !py-1.5 sm:!px-3">
             <span className="sr-only sm:not-sr-only">Invite</span>
           </Button>
         </div>
@@ -479,19 +476,19 @@ export default function Conversation({ session, onError, onChange, openModal, on
       {mode === "canvas" ? <Canvas session={session} onError={onError} openModal={openModal} /> : (
       <>
       {searching ? (
-        <div className="flex shrink-0 items-center gap-2.5 border-b border-white/[0.07] bg-ink-900/60 px-3 py-2 sm:px-5">
-          <Search className="h-4 w-4 shrink-0 text-rose-400/80" />
+        <div className="flex shrink-0 items-center gap-2.5 border-b border-paper/15 bg-ink-900 px-3 py-2 sm:px-5">
+          <Search className="h-4 w-4 shrink-0 text-blood" />
           <input autoFocus value={query} onChange={(e) => { setQuery(e.target.value); setShown(PAGE); }}
             onKeyDown={(e) => { if (e.key === "Escape") closeSearch(); }}
             placeholder="Search this channel (on this device)" aria-label="Search this channel"
-            className="min-w-0 flex-1 bg-transparent text-sm text-white placeholder:text-slate-600 focus:outline-none" />
+            className="min-w-0 flex-1 bg-transparent font-mono text-sm text-paper placeholder:text-dim/60 focus:outline-none" />
           {q ? (
-            <span className="shrink-0 rounded-full bg-white/[0.06] px-2 py-0.5 font-mono text-[10px] text-slate-400" role="status">
+            <span className="shrink-0 border border-paper/25 px-2 py-0.5 font-mono text-[10px] text-dim" role="status">
               {source.length} match{source.length === 1 ? "" : "es"}
             </span>
           ) : null}
           <button onClick={closeSearch} aria-label="Close search"
-            className="rounded p-1 text-slate-500 hover:bg-white/5 hover:text-white">
+            className="p-1 text-dim transition-colors hover:bg-paper/10 hover:text-paper">
             <X className="h-3.5 w-3.5" />
           </button>
         </div>
@@ -518,7 +515,7 @@ export default function Conversation({ session, onError, onChange, openModal, on
             {hidden ? (
               <li className="mb-4 text-center">
                 <button onClick={() => setShown((n) => n + PAGE)}
-                  className="rounded-full border border-white/10 bg-white/[0.03] px-3.5 py-1 text-xs text-slate-400 transition hover:bg-white/[0.06] hover:text-white">
+                  className="border border-paper/25 px-3.5 py-1 font-mono text-[11px] text-dim transition-colors hover:border-paper hover:text-paper">
                   Show {Math.min(PAGE, hidden)} earlier {q ? "match" : "message"}{Math.min(PAGE, hidden) === 1 ? "" : q ? "es" : "s"}
                 </button>
               </li>
@@ -532,16 +529,16 @@ export default function Conversation({ session, onError, onChange, openModal, on
               return (
               <React.Fragment key={`${m.seq}:${m.notice ? "n" : m.audit ? "a" : m.error ? "e" : "m"}:${hidden + i}`}>
               {newDay ? (
-                <li role="separator" className="my-4 flex items-center gap-3 text-[11px] font-medium text-slate-500">
-                  <span className="h-px flex-1 bg-gradient-to-r from-transparent to-white/10" />
-                  <span className="rounded-full border border-white/[0.08] bg-ink-900 px-2.5 py-0.5">{dayLabel(m.at)}</span>
-                  <span className="h-px flex-1 bg-gradient-to-l from-transparent to-white/10" />
+                <li role="separator" className="my-5 flex items-center gap-3 font-mono text-[10px] uppercase tracking-label text-dim">
+                  <span className="h-px flex-1 bg-paper/15" />
+                  <span>{dayLabel(m.at)}</span>
+                  <span className="h-px flex-1 bg-paper/15" />
                 </li>
               ) : null}
               {m.seq === firstNew && m.text !== undefined ? (
                 <li role="separator" data-unread-mark="" aria-label="New messages"
-                  className="my-4 flex items-center gap-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-rose-400">
-                  <span className="h-px flex-1 bg-rose-500/40" />New<span className="h-px w-8 bg-rose-500/40" />
+                  className="my-5 flex items-center gap-3 font-mono text-[10px] font-semibold uppercase tracking-label text-blood">
+                  <span className="h-px flex-1 bg-blood/60" />New<span className="h-px w-8 bg-blood/60" />
                 </li>
               ) : null}
               {/* seq alone isn't unique: notices reuse the seq of the message they follow. */}
@@ -563,37 +560,37 @@ export default function Conversation({ session, onError, onChange, openModal, on
                     ) : null}
                     <div className={`flex min-w-0 max-w-[min(36rem,85%)] flex-col ${m.mine ? "items-end" : "items-start"}`}>
                       {!m.mine && m.from && !grouped ? (
-                        <p className="mb-1 ml-1 flex flex-wrap items-baseline gap-x-1.5 text-xs">
-                          <span className="font-semibold text-slate-200"><Highlight text={m.from} q={q} /></span>
+                        <p className="mb-1 ml-1 flex flex-wrap items-baseline gap-x-2 font-mono text-[11px]">
+                          <span className="font-semibold text-paper"><Highlight text={m.from} q={q} /></span>
                           {m.unverified ? (
-                            <span className="text-amber-400" title="No account has registered the key that signed this">unverified</span>
+                            <span className="dp-tag text-blood" title="No account has registered the key that signed this">unverified</span>
                           ) : null}
                           {m.claimed ? (
-                            <span className="text-amber-400" title="The sender's credential names someone else">claims to be {m.claimed}</span>
+                            <span className="dp-tag text-blood" title="The sender's credential names someone else">claims to be {m.claimed}</span>
                           ) : null}
-                          {m.at ? <time className="text-[11px] text-slate-500" dateTime={m.at} title={new Date(m.at).toLocaleString()}>{fmtTime(m.at)}</time> : null}
+                          {m.at ? <time className="text-dim" dateTime={m.at} title={new Date(m.at).toLocaleString()}>{fmtTime(m.at)}</time> : null}
                         </p>
                       ) : null}
                       {m.deleted ? (
-                        <p className="rounded-2xl border border-dashed border-white/10 px-3.5 py-2 text-xs italic text-slate-500">
+                        <p className="border border-dashed border-paper/25 px-3.5 py-2 font-mono text-[11px] italic text-dim">
                           {m.mine ? "You deleted this message" : `${m.from || "Someone"} deleted this message`}
                         </p>
                       ) : (
                       <div className="relative">
                         <div title={`#${m.seq}`} data-mentions-me={!m.mine && mentionsIn(m.text).has(session.handle) ? "" : undefined}
-                          className={`rounded-2xl px-3.5 py-2 text-[14px] leading-relaxed shadow-sm
-                          ${!m.mine && mentionsIn(m.text).has(session.handle) ? "ring-2 ring-amber-400/50" : ""}
+                          className={`px-3.5 py-2 text-[14px] leading-relaxed
+                          ${!m.mine && mentionsIn(m.text).has(session.handle) ? "border-l-[3px] border-l-acid" : ""}
                           ${m.mine
-                            ? `bg-gradient-to-b from-rose-500 to-rose-600 text-white ${grouped ? "rounded-tr-md" : ""}`
-                            : `border border-white/[0.07] bg-ink-800 text-slate-100 ${grouped ? "rounded-tl-md" : ""}`}`}>
+                            ? "bg-paper text-ink-950 shadow-hard-sm"
+                            : "border border-paper/20 bg-ink-800 text-paper"}`}>
                           {m.re !== undefined ? (() => {
                             const t = quoted(m.re);
-                            const skin = `mb-1.5 block w-full rounded-lg border-l-2 px-2 py-1 text-left text-xs
-                              ${m.mine ? "border-white/60 bg-black/15 text-rose-50/90" : "border-rose-400/60 bg-white/[0.04] text-slate-400"}`;
+                            const skin = `mb-1.5 block w-full border-l-2 border-blood px-2 py-1 text-left text-xs
+                              ${m.mine ? "bg-ink-950/10 text-ink-950/75" : "bg-paper/[0.05] text-paper-dim"}`;
                             if (!t) return <p className={skin}>A message not on this device</p>;
                             return (
                               <button onClick={() => jumpTo(m.re)} title="Go to the message" aria-label={`Go to the quoted message${t.deleted ? "" : `: ${snippet(t.text)}`}`}
-                                className={`${skin} transition ${m.mine ? "hover:bg-black/25" : "hover:bg-white/[0.08]"}`}>
+                                className={`${skin} transition-colors ${m.mine ? "hover:bg-ink-950/20" : "hover:bg-paper/10"}`}>
                                 {t.deleted ? "A deleted message"
                                   : <><span className="font-semibold">{t.mine ? "You" : t.from || "someone"}</span>: {snippet(t.text)}</>}
                               </button>
@@ -605,24 +602,24 @@ export default function Conversation({ session, onError, onChange, openModal, on
                         </div>
                         {joined ? (
                           <div data-pinned={confirmDelete === m.seq || picker === m.seq ? "" : undefined}
-                            className={`dp-actions absolute -top-4 z-10 flex items-center gap-0.5 whitespace-nowrap rounded-lg border border-white/10
-                              bg-ink-850 p-0.5 shadow-lift sm:top-1/2 sm:-translate-y-1/2
+                            className={`dp-actions absolute -top-4 z-10 flex items-center gap-0.5 whitespace-nowrap border border-paper/30
+                              bg-ink-900 p-0.5 shadow-pop sm:top-1/2 sm:-translate-y-1/2
                               ${m.mine ? "left-0 sm:left-auto sm:right-full sm:mr-2" : "right-0 sm:right-auto sm:left-full sm:ml-2"}`}>
                             <span className="relative" data-picker="">
                               <button onClick={() => setPicker((p) => (p === m.seq ? null : m.seq))} aria-label="Add reaction"
                                 aria-expanded={picker === m.seq} title="React"
-                                className="rounded-md p-1.5 text-slate-400 transition hover:bg-white/[0.08] hover:text-white">
+                                className="p-1.5 text-dim transition-colors hover:bg-paper/10 hover:text-paper">
                                 <SmilePlus className="h-3.5 w-3.5" />
                               </button>
                               {picker === m.seq ? (
                                 <span role="menu" aria-label="Reactions"
-                                  className={`absolute bottom-full z-20 mb-2 flex gap-0.5 rounded-xl border border-white/10 bg-ink-850 p-1 shadow-lift
+                                  className={`absolute bottom-full z-20 mb-2 flex gap-0.5 border border-paper/30 bg-ink-900 p-1 shadow-pop
                                     animate-[dp-rise_0.12s_ease-out_both] ${m.mine ? "right-0" : "left-0"}`}>
                                   {REACTIONS.map((e) => {
                                     const on = !!(myKey && m.reactions?.[e]?.[myKey] !== undefined);
                                     return (
                                       <button key={e} role="menuitem" onClick={() => react(m.seq, e, !on)} aria-label={`React ${e}`}
-                                        className={`rounded-lg px-1.5 py-1 text-lg leading-none transition hover:scale-110 hover:bg-white/10 ${on ? "bg-white/10" : ""}`}>
+                                        className={`px-1.5 py-1 text-lg leading-none transition hover:scale-110 hover:bg-paper/10 ${on ? "bg-paper/10" : ""}`}>
                                         {e}
                                       </button>
                                     );
@@ -631,16 +628,16 @@ export default function Conversation({ session, onError, onChange, openModal, on
                               ) : null}
                             </span>
                             <button onClick={() => startReply(m)} aria-label="Reply" title="Reply"
-                              className="rounded-md p-1.5 text-slate-400 transition hover:bg-white/[0.08] hover:text-white">
+                              className="p-1.5 text-dim transition-colors hover:bg-paper/10 hover:text-paper">
                               <Reply className="h-3.5 w-3.5" />
                             </button>
                             <button onClick={() => copy(m)} aria-label={copied === m.seq ? "Copied" : "Copy text"} title="Copy text"
-                              className={`rounded-md p-1.5 transition hover:bg-white/[0.08] ${copied === m.seq ? "text-emerald-400" : "text-slate-400 hover:text-white"}`}>
+                              className={`p-1.5 transition-colors hover:bg-paper/10 ${copied === m.seq ? "text-acid" : "text-dim hover:text-paper"}`}>
                               {copied === m.seq ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
                             </button>
                             {m.mine ? (
                               <button onClick={() => startEdit(m)} aria-label="Edit message" title="Edit for everyone"
-                                className="rounded-md p-1.5 text-slate-400 transition hover:bg-white/[0.08] hover:text-white">
+                                className="p-1.5 text-dim transition-colors hover:bg-paper/10 hover:text-paper">
                                 <Pencil className="h-3.5 w-3.5" />
                               </button>
                             ) : null}
@@ -648,8 +645,8 @@ export default function Conversation({ session, onError, onChange, openModal, on
                               <button onClick={() => remove(m.seq)} onBlur={() => setConfirmDelete(null)}
                                 title="Delete for everyone. Members' clients replace it; a modified client could keep a copy."
                                 aria-label={confirmDelete === m.seq ? "Confirm delete for everyone" : "Delete message"}
-                                className={`flex items-center gap-1 rounded-md p-1.5 text-xs transition ${confirmDelete === m.seq
-                                  ? "bg-rose-600 px-2 font-medium text-white" : "text-slate-400 hover:bg-rose-500/15 hover:text-rose-300"}`}>
+                                className={`flex items-center gap-1 p-1.5 font-mono text-[11px] transition-colors ${confirmDelete === m.seq
+                                  ? "bg-blood px-2 font-semibold text-ink-950" : "text-dim hover:bg-blood/15 hover:text-blood"}`}>
                                 <Trash2 className="h-3.5 w-3.5" />{confirmDelete === m.seq ? "Delete for everyone?" : null}
                               </button>
                             ) : null}
@@ -666,8 +663,8 @@ export default function Conversation({ session, onError, onChange, openModal, on
                             return (
                               <button key={e} onClick={() => joined && react(m.seq, e, !on)} disabled={!joined}
                                 aria-pressed={on} aria-label={`${e} ${names.length}`} title={names.join(", ")}
-                                className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition
-                                  ${on ? "border-rose-400/50 bg-rose-500/15 text-rose-100" : "border-white/10 bg-white/[0.04] text-slate-300 hover:bg-white/[0.08]"}`}>
+                                className={`flex items-center gap-1 border px-2 py-0.5 font-mono text-xs transition-colors
+                                  ${on ? "border-paper bg-paper text-ink-950" : "border-paper/25 text-paper-dim hover:border-paper/60 hover:text-paper"}`}>
                                 <span className="text-sm leading-none">{e}</span>{names.length}
                               </button>
                             );
@@ -675,7 +672,7 @@ export default function Conversation({ session, onError, onChange, openModal, on
                         </div>
                       ) : null}
                       {(m.mine || grouped || m.edited) && !m.deleted ? (
-                        <p className={`mt-0.5 flex items-center gap-1.5 px-1 text-[10px] text-slate-500 ${grouped && !m.edited && !m.mine ? "hidden" : ""}`}>
+                        <p className={`mt-1 flex items-center gap-1.5 px-1 font-mono text-[10px] text-dim ${grouped && !m.edited && !m.mine ? "hidden" : ""}`}>
                           {m.mine && m.at ? <time dateTime={m.at} title={new Date(m.at).toLocaleString()}>{fmtTime(m.at)}</time> : null}
                           {m.edited ? <span title="Edited by its author">edited</span> : null}
                         </p>
@@ -694,9 +691,9 @@ export default function Conversation({ session, onError, onChange, openModal, on
       </div>
       {unseen > 0 ? (
         <button onClick={toEnd}
-          className="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full
-            bg-gradient-to-b from-rose-500 to-rose-600 px-3.5 py-1.5 text-xs font-medium text-white shadow-glow
-            animate-[dp-rise_0.2s_ease-out_both] hover:from-rose-400">
+          className="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-1.5 border-2 border-paper bg-paper px-3.5 py-1.5
+            font-mono text-[11px] font-semibold uppercase tracking-label text-ink-950 shadow-hard
+            animate-[dp-rise_0.2s_ease-out_both] hover:bg-white">
           <ArrowDown className="h-3.5 w-3.5" />{unseen} new message{unseen === 1 ? "" : "s"}
         </button>
       ) : null}
@@ -704,34 +701,34 @@ export default function Conversation({ session, onError, onChange, openModal, on
 
       <div className="shrink-0 px-3 pb-3 pt-1 sm:px-6 sm:pb-5">
         <div className="mx-auto w-full max-w-3xl">
-        <p aria-live="polite" className="mb-1 flex h-4 items-center gap-1.5 truncate pl-1 text-[11px] text-slate-500">
+        <p aria-live="polite" className="mb-1 flex h-4 items-center gap-1.5 truncate pl-1 font-mono text-[11px] text-dim">
           {typers.length ? <span className="inline-flex gap-0.5" aria-hidden="true">
-            {[0, 1, 2].map((d) => <span key={d} className="h-1 w-1 rounded-full bg-rose-400" style={{ animation: `dp-pulse 1s ${d * 0.15}s infinite` }} />)}
+            {[0, 1, 2].map((d) => <span key={d} className="h-1.5 w-1.5 bg-acid" style={{ animation: `dp-pulse 1s ${d * 0.15}s infinite` }} />)}
           </span> : null}
           {typingLine(typers)}
         </p>
         {suggestions.length ? (
           <ul id="mention-list" role="listbox" aria-label="Mention someone"
-            className="mb-2 w-64 overflow-hidden rounded-xl border border-white/10 bg-ink-850 p-1 shadow-lift animate-[dp-rise_0.12s_ease-out_both]">
+            className="mb-2 w-64 overflow-hidden border border-paper/30 bg-ink-900 p-1 shadow-pop animate-[dp-rise_0.12s_ease-out_both]">
             {suggestions.map((h, i) => (
               <li key={h} role="option" aria-selected={i === pick}
                 onMouseDown={(e) => { e.preventDefault(); completeMention(h); }}
-                className={`flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${i === pick ? "bg-white/[0.08] text-white" : "text-slate-300"}`}>
+                className={`flex cursor-pointer items-center gap-2 px-2 py-1.5 text-sm ${i === pick ? "bg-paper/10 text-paper" : "text-paper-dim"}`}>
                 <Avatar name={h} size={20} /><span className="font-mono text-xs">@{h}</span>
               </li>
             ))}
           </ul>
         ) : null}
-        <div className={`rounded-2xl border bg-ink-850 shadow-lift transition
-          ${joined ? "border-white/10 focus-within:border-rose-500/50 focus-within:ring-4 focus-within:ring-rose-500/10" : "border-white/[0.06] opacity-60"}`}>
+        <div className={`border-2 bg-ink-900 transition-colors
+          ${joined ? "border-paper/30 focus-within:border-paper" : "border-paper/15 opacity-60"}`}>
         {replyTo || editing ? (
-          <div className="flex items-center gap-2 border-b border-white/[0.07] px-3 py-2 text-xs text-slate-400">
-            {editing ? <Pencil className="h-3.5 w-3.5 shrink-0 text-rose-400" /> : <Reply className="h-3.5 w-3.5 shrink-0 text-rose-400" />}
+          <div className="flex items-center gap-2 border-b border-paper/15 px-3 py-2 font-mono text-[11px] text-dim">
+            {editing ? <Pencil className="h-3.5 w-3.5 shrink-0 text-blood" /> : <Reply className="h-3.5 w-3.5 shrink-0 text-blood" />}
             <span className="min-w-0 flex-1 truncate">
-              {editing ? "Editing your message" : <>Replying to <span className="font-semibold text-slate-200">{replyTo.mine ? "yourself" : replyTo.from || "someone"}</span>: {snippet(replyTo.text || "")}</>}
+              {editing ? "Editing your message" : <>Replying to <span className="font-semibold text-paper">{replyTo.mine ? "yourself" : replyTo.from || "someone"}</span>: {snippet(replyTo.text || "")}</>}
             </span>
             <button onClick={() => (editing ? stopEditing() : setReplyTo(null))}
-              aria-label={editing ? "Cancel editing" : "Cancel reply"} className="rounded-md p-1 transition hover:bg-white/10 hover:text-white">
+              aria-label={editing ? "Cancel editing" : "Cancel reply"} className="p-1 transition-colors hover:bg-paper/10 hover:text-paper">
               <X className="h-3.5 w-3.5" />
             </button>
           </div>
@@ -770,16 +767,16 @@ export default function Conversation({ session, onError, onChange, openModal, on
               // The full line wraps (and clips) in a one-row box on a phone.
               ? (window.matchMedia?.("(max-width: 639px)").matches ? "Encrypted before it leaves…" : "Encrypted before it leaves this tab…")
               : session.removed ? "Removed from this channel" : "Not a member yet"}
-            className="dp-scroll max-h-40 min-h-[40px] flex-1 resize-none bg-transparent py-2.5 text-[14px] leading-relaxed text-white
-              outline-none placeholder:text-slate-600 disabled:cursor-not-allowed"
+            className="dp-scroll max-h-40 min-h-[40px] flex-1 resize-none bg-transparent py-2.5 text-[14px] leading-relaxed text-paper
+              outline-none placeholder:text-dim/60 disabled:cursor-not-allowed"
           />
           <Button icon={Send} busy={busy === "send"} disabled={!joined || !draft.trim()} onClick={send}
-            className="!rounded-xl !px-3 sm:!px-4">
+            className="!px-3 sm:!px-4">
             <span className="sr-only sm:not-sr-only">{editing ? "Save" : "Send"}</span>
           </Button>
         </div>
         </div>
-        <p className="mt-1.5 hidden items-center justify-center gap-1 text-[10px] text-slate-600 sm:flex">
+        <p className="mt-2 hidden items-center justify-center gap-1.5 font-mono text-[10px] text-dim/80 sm:flex">
           <Lock className="h-2.5 w-2.5" /> End-to-end encrypted with MLS · Enter to send, Shift+Enter for a new line, ↑ to edit your last
         </p>
         </div>

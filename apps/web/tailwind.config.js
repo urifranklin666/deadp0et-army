@@ -1,4 +1,7 @@
 /** @type {import('tailwindcss').Config} */
+// The console wears the same materials as the marketing site: black stage,
+// paper artifacts, one red signal, acid for "live", cyan for other people.
+// Hard offset shadows and square corners — cut paper, not glass.
 export default {
   content: ["./index.html", "./src/**/*.{js,jsx}"],
   theme: {
@@ -6,15 +9,26 @@ export default {
       fontFamily: {
         // Self-hosted (the CSP allows fonts from 'self' only).
         sans: ['"Inter Variable"', "ui-sans-serif", "system-ui", "sans-serif"],
-        mono: ['"JetBrains Mono Variable"', "ui-monospace", "SFMono-Regular", "monospace"],
+        mono: ['"IBM Plex Mono"', "ui-monospace", "SFMono-Regular", "monospace"],
+        display: ['"Archivo Black"', "Impact", "ui-sans-serif", "sans-serif"],
       },
       colors: {
-        ink: { 950: "#05060a", 900: "#090b11", 850: "#0d1017", 800: "#12151e", 700: "#1a1e2a" },
+        ink: { 950: "#070707", 900: "#0e0e0d", 850: "#151513", 800: "#1c1c19", 700: "#2a2a25" },
+        paper: { DEFAULT: "#e9e4d8", dim: "#b8b3aa" },
+        dim: "#8c8880",
+        blood: "#f03224",
+        acid: "#d8ff38",
+        ice: "#51e8df",
       },
       boxShadow: {
-        glow: "0 0 0 1px rgba(244,63,94,.35), 0 8px 30px -12px rgba(244,63,94,.6)",
-        lift: "0 12px 40px -12px rgba(0,0,0,.7), 0 0 0 1px rgba(255,255,255,.06)",
+        hard: "4px 4px 0 #f03224",
+        "hard-sm": "3px 3px 0 #f03224",
+        "hard-xs": "2px 2px 0 #f03224",
+        "hard-lg": "10px 10px 0 #f03224",
+        "hard-paper": "4px 4px 0 #e9e4d8",
+        pop: "4px 4px 0 rgba(233,228,216,.14)",
       },
+      letterSpacing: { eyebrow: "0.15em", label: "0.12em" },
     },
   },
   plugins: [],

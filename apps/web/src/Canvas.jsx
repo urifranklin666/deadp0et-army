@@ -12,7 +12,8 @@ import { Presence } from "./lib/presence.js";
  * device per stroke.
  */
 
-const COLORS = ["#fb3b53", "#0ea5c4", "#e879f9", "#fbbf24", "#e2e8f0"];
+// The site's inks, plus a pencil grey.
+const COLORS = ["#f03224", "#d8ff38", "#51e8df", "#e9e4d8", "#8c8880"];
 const WIDTHS = [2, 4, 8, 16];
 
 export default function Canvas({ session, onError, openModal }) {
@@ -154,46 +155,46 @@ export default function Canvas({ session, onError, openModal }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex flex-wrap items-center gap-1.5 border-b border-white/[0.07] px-3 py-2 sm:px-5">
-        <div className="flex items-center gap-1.5 rounded-xl border border-white/[0.07] bg-ink-900 px-2 py-1">
-        <Palette className="mr-0.5 h-3.5 w-3.5 text-slate-500" />
+      <div className="flex flex-wrap items-center gap-1.5 border-b border-paper/15 px-3 py-2 sm:px-5">
+        <div className="flex items-center gap-1.5 border border-paper/25 px-2 py-1">
+        <Palette className="mr-0.5 h-3.5 w-3.5 text-dim" />
         {COLORS.map((c) => (
           <button key={c} onClick={() => { setColor(c); setErasing(false); }} aria-label={`Colour ${c}`}
-            className={`h-5 w-5 rounded-full transition hover:scale-110
-              ${color === c && !erasing ? "scale-110 ring-2 ring-white ring-offset-2 ring-offset-ink-900" : "ring-1 ring-white/20"}`}
+            className={`h-5 w-5 transition hover:scale-110
+              ${color === c && !erasing ? "scale-110 ring-2 ring-paper ring-offset-2 ring-offset-ink-950" : "ring-1 ring-paper/30"}`}
             style={{ background: c }} />
         ))}
         </div>
-        <div className="flex items-center gap-0.5 rounded-xl border border-white/[0.07] bg-ink-900 p-0.5">
+        <div className="flex items-center gap-0.5 border border-paper/25 p-0.5">
         {WIDTHS.map((w) => (
           <button key={w} onClick={() => { setWidth(w); setErasing(false); }} aria-label={`Width ${w}`}
-            className={`flex h-7 w-7 items-center justify-center rounded-lg transition-colors
-              ${width === w && !erasing ? "bg-white/[0.12]" : "hover:bg-white/[0.06]"}`}>
-            <span className="rounded-full bg-slate-300" style={{ width: w + 2, height: w + 2 }} />
+            className={`flex h-7 w-7 items-center justify-center transition-colors
+              ${width === w && !erasing ? "bg-paper/15" : "hover:bg-paper/10"}`}>
+            <span className="rounded-full bg-paper" style={{ width: w + 2, height: w + 2 }} />
           </button>
         ))}
         </div>
-        <div className="flex items-center gap-0.5 rounded-xl border border-white/[0.07] bg-ink-900 p-0.5">
+        <div className="flex items-center gap-0.5 border border-paper/25 p-0.5">
         <button onClick={() => setErasing((v) => !v)} aria-label="Eraser" aria-pressed={erasing} title="Eraser"
-          className={`rounded-lg p-1.5 transition-colors ${erasing ? "bg-rose-500/20 text-rose-300" : "text-slate-400 hover:bg-white/[0.06] hover:text-white"}`}>
+          className={`p-1.5 transition-colors ${erasing ? "bg-paper text-ink-950" : "text-dim hover:bg-paper/10 hover:text-paper"}`}>
           <Eraser className="h-4 w-4" />
         </button>
         <button onClick={undo} aria-label="Undo" disabled={!count} title="Undo"
-          className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-white disabled:opacity-30">
+          className="p-1.5 text-dim transition-colors hover:bg-paper/10 hover:text-paper disabled:opacity-30">
           <Undo2 className="h-4 w-4" />
         </button>
         <button onClick={clear} aria-label="Clear board" disabled={!count} title="Clear the board"
-          className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-rose-500/15 hover:text-rose-300 disabled:opacity-30">
+          className="p-1.5 text-dim transition-colors hover:bg-blood/15 hover:text-blood disabled:opacity-30">
           <Trash2 className="h-4 w-4" />
         </button>
         </div>
-        <span className="ml-auto flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-slate-500">
-          {peers.length ? <span className="h-1.5 w-1.5 rounded-full bg-cyan-400 shadow-[0_0_6px_rgba(34,211,238,.9)]" /> : null}
+        <span className="dp-tag ml-auto flex items-center gap-1.5 text-dim">
+          {peers.length ? <span className="h-1.5 w-1.5 bg-acid" /> : null}
           {peers.length ? `${peers.length} live · ` : ""}{count} stroke{count === 1 ? "" : "s"} · e2ee
         </span>
       </div>
 
-      <div ref={wrapRef} className="relative m-2 min-h-0 flex-1 overflow-hidden rounded-xl border border-white/[0.06] bg-black/50 [container-type:size] sm:m-3">
+      <div ref={wrapRef} className="relative m-2 min-h-0 flex-1 overflow-hidden border-2 border-paper/30 bg-[#0b0b0a] [container-type:size] sm:m-3">
         <canvas
           ref={canvasRef}
           onPointerDown={down}
@@ -209,9 +210,9 @@ export default function Canvas({ session, onError, openModal }) {
             style={{ left: 0, top: 0, transform: `translate(${p.x * 100}cqw, ${p.y * 100}cqh)` }}>
             <svg width="18" height="18" viewBox="0 0 18 18" className="drop-shadow">
               <path d="M2 2 L2 14 L6 10.5 L8.5 16 L11 15 L8.5 9.5 L14 9 Z"
-                fill="#22d3ee" stroke="#05060a" strokeWidth="1.2" />
+                fill="#51e8df" stroke="#070707" strokeWidth="1.2" />
             </svg>
-            <span className="ml-3 rounded-md bg-cyan-400 px-1.5 py-0.5 font-mono text-[10px] font-medium text-ink-950 shadow">
+            <span className="ml-3 bg-ice px-1.5 py-0.5 font-mono text-[10px] font-semibold text-ink-950 shadow-[2px_2px_0_#070707]">
               {p.handle}
             </span>
           </div>
@@ -219,16 +220,16 @@ export default function Canvas({ session, onError, openModal }) {
 
         {!joined ? (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-            <p className="max-w-xs text-center text-xs leading-relaxed text-slate-500">
+            <p className="max-w-xs text-center font-mono text-[11px] leading-relaxed text-dim">
               This device isn't a member yet. Once invited, a collaborator publishes the board
               at the new epoch — earlier strokes stay unreadable, by design.
             </p>
           </div>
         ) : count === 0 ? (
           <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center">
-            <PenLine className="h-6 w-6 text-slate-700" strokeWidth={1.5} />
-            <p className="mt-3 text-sm font-medium text-slate-500">Draw something incriminating.</p>
-            <p className="mt-1 text-xs text-slate-600">Every stroke is encrypted for this channel's members before it leaves.</p>
+            <PenLine className="h-6 w-6 text-dim/60" strokeWidth={1.5} />
+            <p className="mt-3 font-display text-[22px] tracking-[-0.03em] text-paper/80">Draw something incriminating.</p>
+            <p className="mt-1.5 font-mono text-[11px] text-dim">Every stroke is encrypted for this channel's members before it leaves.</p>
           </div>
         ) : null}
       </div>

@@ -42,33 +42,33 @@ export default function SessionsModal({ onClose }) {
 
   return (
     <Shell title="Sessions" onClose={busy ? () => {} : onClose}>
-      <p className="mt-2 text-xs leading-relaxed text-slate-400">
+      <p className="mt-3 text-xs leading-relaxed text-paper-dim">
         Every browser signed in to your account. End any you don't recognise.
       </p>
       {list === null ? (
-        <Loader2 className="mx-auto mt-4 h-4 w-4 animate-spin text-slate-500" />
+        <Loader2 className="mx-auto mt-4 h-4 w-4 animate-spin text-dim" />
       ) : (
         <ul className="mt-4 space-y-1.5">
           {list.map((s) => (
-            <li key={s.id} className="flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-xs">
-              <Monitor className="h-3.5 w-3.5 shrink-0 text-slate-500" />
-              <span className="min-w-0 flex-1 text-slate-300">
+            <li key={s.id} className="flex items-center gap-2 border border-paper/20 px-3 py-2 text-xs">
+              <Monitor className="h-3.5 w-3.5 shrink-0 text-dim" />
+              <span className="min-w-0 flex-1 text-paper">
                 {describeAgent(s.userAgent)}
-                {s.current ? <span className="ml-1.5 text-[10px] uppercase tracking-wider text-emerald-400">this browser</span> : null}
-                <span className="block font-mono text-[10px] text-slate-500">
+                {s.current ? <span className="dp-tag ml-1.5 text-acid">this browser</span> : null}
+                <span className="block font-mono text-[10px] text-dim">
                   signed in {fmtTime(s.createdAt)}{s.lastSeenAt ? ` · active ${fmtTime(s.lastSeenAt)}` : ""}
                 </span>
               </span>
               <button aria-label={`End session: ${describeAgent(s.userAgent)}${s.current ? " (this browser)" : ""}`}
                 disabled={!!busy} onClick={() => revoke(s)}
-                className="rounded p-1 text-slate-500 hover:bg-rose-600/20 hover:text-rose-300 disabled:opacity-30">
+                className="p-1 text-dim transition-colors hover:bg-blood/15 hover:text-blood disabled:opacity-30">
                 {busy === s.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
               </button>
             </li>
           ))}
         </ul>
       )}
-      {err ? <p className="mt-3 text-xs text-rose-300">{err}</p> : null}
+      {err ? <p className="mt-3 font-mono text-[11px] text-blood">{err}</p> : null}
     </Shell>
   );
 }

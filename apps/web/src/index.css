@@ -4,23 +4,33 @@
 
 html, body, #root { height: 100%; }
 body {
-  background: #05060a;
+  background: #070707;
+  color: #e9e4d8;
   font-feature-settings: "cv11", "ss01", "ss03";   /* Inter: open digits, straighter 'a', curly quotes */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
 }
-::selection { background: rgba(244, 63, 94, .35); color: #fff; }
+::selection { background: #f03224; color: #070707; }
+
+/* Keyboard focus is acid: the one colour nothing else in the chrome uses. */
+:focus-visible { outline: 2px solid #d8ff38; outline-offset: 2px; }
+input:focus-visible, textarea:focus-visible { outline: none; }
 
 @keyframes dp-rise { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
 @keyframes dp-blink { 0%,49% { opacity: 1 } 50%,100% { opacity: 0 } }
-@keyframes dp-pulse { 0%,100% { opacity: .35 } 50% { opacity: 1 } }
-@keyframes dp-flash { 0%,35% { background: rgba(244,63,94,.16) } 100% { background: transparent } }
+@keyframes dp-pulse { 0%,100% { opacity: .25 } 50% { opacity: 1 } }
+@keyframes dp-flash { 0%,35% { background: rgba(216,255,56,.14) } 100% { background: transparent } }
+@keyframes dp-tick { from { width: 0 } to { width: 100% } }
 
-.dp-scroll { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.12) transparent; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+
+.dp-scroll { scrollbar-width: thin; scrollbar-color: rgba(233,228,216,.22) transparent; }
 .dp-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
-.dp-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,.1); border-radius: 9999px; border: 2px solid transparent; background-clip: padding-box; }
-.dp-scroll::-webkit-scrollbar-thumb:hover { background-color: rgba(244,63,94,.45); }
+.dp-scroll::-webkit-scrollbar-thumb { background: rgba(233,228,216,.2); border: 2px solid transparent; background-clip: padding-box; }
+.dp-scroll::-webkit-scrollbar-thumb:hover { background-color: #f03224; }
 .dp-scroll::-webkit-scrollbar-track { background: transparent; }
 
 /* Message actions: revealed on hover/focus where there's a pointer that can
@@ -30,12 +40,20 @@ body {
   .dp-msg:hover .dp-actions, .dp-msg:focus-within .dp-actions, .dp-actions[data-pinned] { opacity: 1; }
 }
 
-/* A message reached from a reply's quote glows briefly. */
-li[data-flash] { animation: dp-flash 1.6s ease-out both; border-radius: 1rem; }
+/* A message reached from a reply's quote lights up briefly. */
+li[data-flash] { animation: dp-flash 1.6s ease-out both; }
 
-/* Faint grid behind the console, like graph paper under the glass. */
-.dp-grid {
-  background-image:
-    radial-gradient(1200px 600px at 10% -10%, rgba(244,63,94,.07), transparent 60%),
-    radial-gradient(900px 500px at 110% 110%, rgba(34,211,238,.05), transparent 60%);
+/* Film grain over the stage, as on the site. Fixed, so it never scrolls. */
+.dp-noise { position: relative; isolation: isolate; }
+.dp-noise::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none; opacity: .09;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
+
+/* Mono caps labels: the console's signage. */
+.dp-eyebrow { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 10px; font-weight: 600; letter-spacing: .15em; text-transform: uppercase; }
+.dp-tag { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 10px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; }
+
+/* The brand mark: a red ring with a dashed orbit, lifted from the site nav. */
+.dp-mark { position: relative; display: grid; place-items: center; border: 1px solid #f03224; border-radius: 50%; color: #f03224; }
+.dp-mark::after { content: ""; position: absolute; inset: -4px; border: 1px dashed rgba(240,50,36,.4); border-radius: 50%; }

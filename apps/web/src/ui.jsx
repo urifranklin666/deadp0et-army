@@ -13,30 +13,39 @@ export function fmtTime(iso) {
     : `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${time}`;
 }
 
+/** A paper-framed window on the black stage, with the red offset the site uses. */
 export function Glass({ className = "", children }) {
   const positioned = /(^|\s)(absolute|fixed|sticky)(\s|$)/.test(className);
   return (
-    <div className={`${positioned ? "" : "relative "}rounded-xl border border-white/10 bg-white/[0.035] backdrop-blur-xl ${className}`}>
+    <div className={`${positioned ? "" : "relative "}border-2 border-paper bg-ink-900 shadow-hard-lg ${className}`}>
       {children}
     </div>
   );
 }
 
+/**
+ * Buttons speak in mono caps, like the site's. Primary is paper with the red
+ * offset; pressing it pushes the paper into its own shadow.
+ */
 export function Button({ children, icon: Icon, busy, variant = "primary", className = "", ...rest }) {
   const skins = {
-    primary: "bg-gradient-to-b from-rose-500 to-rose-600 text-white shadow-glow hover:from-rose-400 hover:to-rose-500 active:translate-y-px",
-    ghost: "border border-white/10 bg-white/[0.04] text-slate-200 hover:border-white/20 hover:bg-white/[0.07] hover:text-white",
+    primary: `border-paper bg-paper text-ink-950 shadow-hard hover:bg-white
+      active:translate-x-[2px] active:translate-y-[2px] active:shadow-hard-xs`,
+    ghost: "border-paper/30 bg-transparent text-paper hover:border-paper hover:bg-paper/5",
+    danger: `border-blood bg-blood text-ink-950 shadow-hard-paper hover:bg-[#ff4a3d]
+      active:translate-x-[2px] active:translate-y-[2px] active:shadow-[2px_2px_0_#e9e4d8]`,
   };
   return (
     <button
       {...rest}
       disabled={busy || rest.disabled}
-      className={`inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold
-        transition-all duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/70
-        focus-visible:ring-offset-2 focus-visible:ring-offset-ink-950
-        disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none ${skins[variant]} ${className}`}
+      className={`inline-flex items-center justify-center gap-2 border-2 px-3.5 py-2 font-mono text-[11px] font-semibold uppercase
+        tracking-label transition-[transform,box-shadow,background-color,border-color,color] duration-100
+        disabled:cursor-not-allowed disabled:border-paper/25 disabled:bg-transparent disabled:text-dim disabled:shadow-none
+        disabled:active:translate-x-0 disabled:active:translate-y-0
+        ${skins[variant]} ${className}`}
     >
-      {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : Icon ? <Icon className="h-4 w-4" /> : null}
+      {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : Icon ? <Icon className="h-4 w-4" strokeWidth={2.25} /> : null}
       {children}
     </button>
   );
@@ -44,19 +53,19 @@ export function Button({ children, icon: Icon, busy, variant = "primary", classN
 
 export function Banner({ kind = "error", children, onClose }) {
   const skins = {
-    error: "border-rose-500/30 bg-rose-500/[0.08] text-rose-100",
-    info: "border-cyan-400/20 bg-cyan-400/[0.06] text-cyan-100",
-    ok: "border-emerald-400/20 bg-emerald-400/[0.07] text-emerald-100",
+    error: "border-blood text-paper",
+    info: "border-ice text-paper",
+    ok: "border-acid text-paper",
   };
   const Icon = { error: AlertTriangle, info: Info, ok: CheckCircle2 }[kind] || Info;
-  const tint = { error: "text-rose-400", info: "text-cyan-300", ok: "text-emerald-400" }[kind];
+  const tint = { error: "text-blood", info: "text-ice", ok: "text-acid" }[kind];
   return (
-    <div className={`flex items-start gap-2.5 rounded-xl border px-3.5 py-2.5 text-[13px] leading-snug shadow-lift
+    <div className={`flex items-start gap-2.5 border border-paper/20 border-l-4 bg-ink-900 px-3.5 py-2.5 text-[13px] leading-snug shadow-pop
       animate-[dp-rise_0.2s_ease-out_both] ${skins[kind]}`}>
       <Icon className={`mt-px h-4 w-4 shrink-0 ${tint}`} />
       <span className="min-w-0 flex-1 break-words">{children}</span>
       {onClose ? (
-        <button onClick={onClose} className="-m-1 shrink-0 rounded-md p-1 opacity-60 transition hover:bg-white/10 hover:opacity-100" aria-label="Dismiss">
+        <button onClick={onClose} className="-m-1 shrink-0 p-1 text-dim transition hover:bg-paper/10 hover:text-paper" aria-label="Dismiss">
           <X className="h-3.5 w-3.5" />
         </button>
       ) : null}
@@ -64,20 +73,28 @@ export function Banner({ kind = "error", children, onClose }) {
   );
 }
 
-
-/** Initial in a circle, coloured from the name, so people are told apart at a glance. */
+/**
+ * Initial on a square, in one of the five brand inks, so people are told
+ * apart at a glance without any colour the rest of the console doesn't use.
+ */
+const INKS = [
+  ["#e9e4d8", "#070707"],   // paper
+  ["#f03224", "#070707"],   // blood
+  ["#d8ff38", "#070707"],   // acid
+  ["#51e8df", "#070707"],   // ice
+  ["#070707", "#e9e4d8"],   // black, paper letter
+];
 export function Avatar({ name, size = 28, className = "" }) {
   const n = name || "?";
   let h = 0;
   for (let i = 0; i < n.length; i++) h = (h * 31 + n.charCodeAt(i)) >>> 0;
-  const hue = h % 360;
+  const [bg, fg] = INKS[h % INKS.length];
   return (
     <span aria-hidden="true"
-      className={`inline-flex shrink-0 select-none items-center justify-center rounded-full font-semibold uppercase ${className}`}
+      className={`inline-flex shrink-0 select-none items-center justify-center font-mono font-semibold uppercase ${className}`}
       style={{
-        width: size, height: size, fontSize: Math.round(size * 0.42),
-        color: `hsl(${hue} 90% 80%)`, background: `hsl(${hue} 55% 22% / .9)`,
-        boxShadow: `inset 0 0 0 1px hsl(${hue} 70% 60% / .25)`,
+        width: size, height: size, fontSize: Math.round(size * 0.46), lineHeight: 1,
+        color: fg, background: bg, boxShadow: `inset 0 0 0 1px ${fg === "#070707" ? "rgba(7,7,7,.25)" : "rgba(233,228,216,.5)"}`,
       }}>
       {n.replace(/[^a-z0-9]/gi, "").charAt(0) || "?"}
     </span>
