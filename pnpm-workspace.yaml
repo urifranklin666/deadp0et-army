@@ -20,3 +20,11 @@ overrides:
   "fast-uri@>=4.0.0 <4.1.5": "^4.1.5"
   "nanoid@<3.3.18": "^3.3.18"
   "esbuild@<0.24.3": "^0.25.0"
+
+# Advisories with no fixed release to override to. Each entry says why it is
+# acceptable to wait; remove it once the package ships a fix.
+auditConfig:
+  ignoreGhsas:
+    # braces <=3.0.3: stack exhaustion on deeply nested brace patterns. Dev-only
+    # here, via tailwindcss 3's file watcher and glob, never fed user input.
+    - GHSA-vfj7-8cjw-p6xm

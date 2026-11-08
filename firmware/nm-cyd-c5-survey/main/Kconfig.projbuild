@@ -1,0 +1,146 @@
+menu "NM-CYD-C5 Wi-Fi Survey"
+
+    config SURVEY_COUNTRY
+        string "Regulatory country code"
+        default "US"
+        help
+            Two-letter ISO code. It decides which 5 GHz channels the radio is
+            allowed to probe, so set it to where the device is used. "01" is
+            the world-safe set with fewer 5 GHz channels.
+
+    choice SURVEY_SCAN_TYPE
+        prompt "Scan type"
+        default SURVEY_SCAN_ACTIVE
+        config SURVEY_SCAN_ACTIVE
+            bool "Active (send probe requests; faster)"
+        config SURVEY_SCAN_PASSIVE
+            bool "Passive (listen for beacons only; slower, transmits nothing)"
+    endchoice
+
+    config SURVEY_SCAN_ACTIVE_MAX_MS
+        int "Active scan: max dwell per channel (ms)"
+        depends on SURVEY_SCAN_ACTIVE
+        range 20 1500
+        default 120
+
+    config SURVEY_SCAN_PASSIVE_MS
+        int "Passive scan: dwell per channel (ms)"
+        depends on SURVEY_SCAN_PASSIVE
+        range 50 1500
+        default 160
+
+    config SURVEY_SCAN_GAP_MS
+        int "Pause between scans (ms)"
+        range 0 60000
+        default 500
+
+    config SURVEY_AP_TTL_SCANS
+        int "Forget a network after this many scans without hearing it"
+        range 1 100
+        default 5
+
+    config SURVEY_SD_LOG
+        bool "Append every scan to /sdcard/survey.csv when a card is present"
+        default y
+
+    menu "Display"
+        choice SURVEY_LCD_CONTROLLER
+            prompt "LCD controller"
+            default SURVEY_LCD_ST7789
+            help
+                RockBase ships the NM-CYD-C5 with an ST7789 and documents an
+                ILI9341 variant.
+            config SURVEY_LCD_ST7789
+                bool "ST7789"
+            config SURVEY_LCD_ILI9341
+                bool "ILI9341"
+        endchoice
+
+        config SURVEY_LCD_PCLK_MHZ
+            int "SPI clock (MHz)"
+            range 1 80
+            default 20
+
+        config SURVEY_LCD_BGR
+            bool "Panel wants BGR element order (flip if red and blue are swapped)"
+            default n
+
+        config SURVEY_LCD_INVERT
+            bool "Invert colours (flip if the image looks like a negative)"
+            default n
+
+        config SURVEY_LCD_SWAP_XY
+            bool "Swap X/Y (landscape)"
+            default y
+        config SURVEY_LCD_MIRROR_X
+            bool "Mirror X"
+            default y
+        config SURVEY_LCD_MIRROR_Y
+            bool "Mirror Y"
+            default n
+    endmenu
+
+    menu "Touch calibration"
+        help
+            Raw XPT2046 readings at the panel edges (0..4095). Enable the
+            debug log, tap the corners, and copy the numbers here.
+        config SURVEY_TOUCH_RAW_XMIN
+            int "Raw X at left edge"
+            default 200
+        config SURVEY_TOUCH_RAW_XMAX
+            int "Raw X at right edge"
+            default 3900
+        config SURVEY_TOUCH_RAW_YMIN
+            int "Raw Y at top edge"
+            default 200
+        config SURVEY_TOUCH_RAW_YMAX
+            int "Raw Y at bottom edge"
+            default 3900
+        config SURVEY_TOUCH_SWAP_XY
+            bool "Swap X/Y"
+            default y
+        config SURVEY_TOUCH_MIRROR_X
+            bool "Mirror X"
+            default n
+        config SURVEY_TOUCH_MIRROR_Y
+            bool "Mirror Y"
+            default n
+        config SURVEY_TOUCH_DEBUG
+            bool "Log raw and mapped touch points"
+            default n
+    endmenu
+
+    menu "Pins"
+        config SURVEY_PIN_SCLK
+            int "SPI SCLK"
+            default 6
+        config SURVEY_PIN_MOSI
+            int "SPI MOSI"
+            default 7
+        config SURVEY_PIN_MISO
+            int "SPI MISO"
+            default 2
+        config SURVEY_PIN_LCD_CS
+            int "LCD CS"
+            default 23
+        config SURVEY_PIN_LCD_DC
+            int "LCD DC"
+            default 24
+        config SURVEY_PIN_LCD_RST
+            int "LCD RST (-1: tied to board reset)"
+            default -1
+        config SURVEY_PIN_BACKLIGHT
+            int "LCD backlight (active high)"
+            default 25
+        config SURVEY_PIN_TOUCH_CS
+            int "Touch CS"
+            default 1
+        config SURVEY_PIN_SD_CS
+            int "microSD CS"
+            default 10
+        config SURVEY_PIN_LED
+            int "WS2812 data"
+            default 27
+    endmenu
+
+endmenu
